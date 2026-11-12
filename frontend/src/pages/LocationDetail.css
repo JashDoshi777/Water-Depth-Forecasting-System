@@ -31,3 +31,5 @@
   .ld-big { font-size: 56px; }
   .ld-chart { height: 210px; }
 }
+.ld-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.ld-actions .btn { gap: 6px; }

@@ -1,0 +1,15 @@
+.dv-top { align-items: start; }
+.dv-inline { font-size: 13px; color: var(--label-2); max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
+.dv-method { font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 6px; letter-spacing: 0.02em; }
+.dv-method.GET { background: var(--green-tint); color: var(--green); }
+.dv-method.POST { background: var(--blue-tint); color: var(--blue); }
+.dv-path { font-size: 14px; overflow-wrap: anywhere; }
+.dv-note { font-size: 14px; color: var(--label-2); margin: 0; }
+.dv-code { position: relative; background: var(--bg-inset); border-radius: 12px; min-width: 0; }
+.dv-code pre { margin: 0; padding: 14px 16px; overflow: auto; font: 13px/1.55 var(--font-mono); max-width: 100%; }
+.dv-copy { position: absolute; top: 8px; right: 8px; z-index: 1; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border: 0; border-radius: 14px; background: var(--material-thick); color: var(--blue); font: 500 12px var(--font); cursor: pointer; box-shadow: var(--shadow-card); }
+.dv-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; margin-top: 4px; }
+.dv-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--label-2); min-width: 0; }
+.dv-form input { height: 38px; border-radius: 10px; border: 0; background: var(--fill-3); padding: 0 12px; font-size: 14px; color: var(--label); outline: none; min-width: 0; }
+.dv-form input:focus-visible { box-shadow: 0 0 0 3px var(--blue-tint), 0 0 0 1.5px var(--blue); }
+@media (max-width: 820px) { .dv-form { grid-template-columns: 1fr; } .dv-inline { max-width: 40vw; } .dv-code pre { padding-right: 16px; padding-top: 38px; } }

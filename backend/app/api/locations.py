@@ -71,7 +71,7 @@ def _enrich_location(loc: dict) -> dict:
         "water_body_type": wb_type,
         "name": loc["name"],
         "region": loc.get("region", ""),
-        "base_depth": estimate_base_depth(lat, lon, wb_type),
+        "base_depth": loc["depth"] if loc.get("depth") else estimate_base_depth(lat, lon, wb_type),
         "shore_distance_km": estimate_shore_distance(lat, lon),
     }
     _enriched_cache[key] = result
@@ -236,7 +236,7 @@ def _build_geojson() -> dict:
                 "n": loc["name"],
                 "r": loc.get("region", ""),
                 "t": wb,
-                "d": round(float(estimate_base_depth(loc["lat"], loc["lon"], wb)), 1),
+                "d": round(float(loc["depth"] if loc.get("depth") else estimate_base_depth(loc["lat"], loc["lon"], wb)), 1),
             },
         })
     return {"type": "FeatureCollection", "features": features}

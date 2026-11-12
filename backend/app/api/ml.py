@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.ml import runtime
@@ -92,3 +92,39 @@ async def flood(req: PointRequest):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Upstream data unavailable: {e}")
     return {"digipin": pin, "latitude": lat, "longitude": lon, "water_body_type": wb, **res}
+
+
+# ───────────── Active learning: where to survey next ─────────────
+_survey_cache: dict = {}
+
+
+def _survey_cells() -> dict:
+    if not _survey_cache:
+        import json, os
+        p = os.path.join(os.path.dirname(__file__), "..", "data", "survey_priority.json")
+        if not os.path.exists(p):
+            raise HTTPException(status_code=503, detail="survey map not built yet — run `python -m app.ml.survey` in backend/")
+        _survey_cache.update(json.load(open(p)))
+    return _survey_cache
+
+
+@router.get("/survey-priority")
+async def survey_priority(n: int = Query(200, ge=1, le=2000), bbox: str | None = Query(None, description="minLon,minLat,maxLon,maxLat")):
+    """GeoJSON FeatureCollection of the least-certain 0.25° ocean cells (bootstrap-ensemble std of the static-depth model), sorted by uncertainty desc."""
+    S = _survey_cells()
+    cells = S["cells"]
+    if bbox:
+        try:
+            x0, y0, x1, y1 = [float(v) for v in bbox.split(",")]
+        except ValueError:
+            raise HTTPException(status_code=422, detail="bbox must be minLon,minLat,maxLon,maxLat")
+        cells = [c for c in cells if x0 <= c["lon"] <= x1 and y0 <= c["lat"] <= y1]
+    feats = [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [c["lon"], c["lat"]]},
+              "properties": {"uncertainty_m": c["uncertainty_m"], "predicted_depth_m": c["predicted_depth_m"], "rank": i + 1,
+                             "relative_uncertainty_pct": round(100 * c["uncertainty_m"] / max(c["predicted_depth_m"], 1.0), 1)}}
+             for i, c in enumerate(cells[:n])]
+    return {"type": "FeatureCollection", "features": feats,
+            "metadata": {"resolution_deg": S["resolution_deg"], "n_members": S["n_members"], "n_cells_total": len(S["cells"]), "n_returned": len(feats),
+                         "generated_at": S["generated_at"], "heldout_mae_m": S["heldout_mae_m"], "corr_uncertainty_vs_abs_error": S["corr_uncertainty_vs_abs_error"],
+                         "note": "uncertainty_m = standard deviation across 8 bootstrap XGBoost models trained on a sparse 10% sample of ETOPO ocean cells: model disagreement, not true error. "
+                                 "It is in absolute metres, so it is largest over deep ocean; relative_uncertainty_pct normalises by depth."}}

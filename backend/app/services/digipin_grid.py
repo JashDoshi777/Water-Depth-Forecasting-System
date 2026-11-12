@@ -4,7 +4,7 @@ DIGIPIN Grid Generator — Generates 95K+ water body DIGIPIN locations.
 Covers:
   - Indian coastline (7,500+ km) at ~0.05° spacing
   - Major river systems (20+ rivers) at ~0.1° spacing
-  - Lakes and reservoirs (100+)
+  - Real named lakes and reservoirs (OSM + Natural Earth, ~1.4K)
   - Indian EEZ ocean grid at ~0.5° spacing
 
 All coordinates are real geographic reference data.
@@ -13,7 +13,10 @@ No depth values are hardcoded — depths come from live APIs.
 
 from __future__ import annotations
 
+import json
 import math
+import os
+from functools import lru_cache
 from typing import Iterator
 
 from app.services.digipin_codec import encode
@@ -230,6 +233,58 @@ _RESERVOIRS: list[tuple[str, float, float, str]] = [
 ]
 
 
+# ─────────────────────────────────────────────────────────────────────
+#  Real lakes & reservoirs (replaces the old hand-listed _LAKES/_RESERVOIRS grids)
+# ─────────────────────────────────────────────────────────────────────
+def estimate_waterbody_depth(kind: str, area_km2: float | None, mean_depth_m: float | None) -> float:
+    """Mean depth if known; else documented heuristic: reservoirs 12+4*ln(1+A) m (8-60), lakes 1.5+0.9*ln(1+A) m (1.5-15)."""
+    if mean_depth_m:
+        return round(float(mean_depth_m), 1)
+    a = area_km2 or 1.0
+    if kind == "reservoir":
+        return round(min(60.0, max(8.0, 12 + 4 * math.log(1 + a))), 1)
+    return round(min(15.0, max(1.5, 1.5 + 0.9 * math.log(1 + a))), 1)
+
+
+def _interior_points(geom, n_target: int) -> list[tuple[float, float]]:
+    from shapely.geometry import Point
+    minx, miny, maxx, maxy = geom.bounds
+    k = max(2, int(math.sqrt(n_target * 2)))
+    pts = []
+    for i in range(k):
+        for j in range(k):
+            lon = minx + (i + 0.5) * (maxx - minx) / k
+            lat = miny + (j + 0.5) * (maxy - miny) / k
+            if geom.contains(Point(lon, lat)):
+                pts.append((round(lat, 5), round(lon, 5)))
+    return pts[:n_target]
+
+
+@lru_cache(maxsize=1)
+def load_real_waterbodies() -> tuple:
+    """Parsed real water bodies: dicts with id,name,kind,state,depth,points[(lat,lon)...]."""
+    path = os.path.join(os.path.dirname(__file__), "..", "data", "waterbodies_india.geojson")
+    try:
+        feats = json.load(open(path, encoding="utf-8"))["features"]
+    except Exception:
+        return tuple()
+    out = []
+    for f in feats:
+        p = f["properties"]
+        pts = [(p["lat"], p["lon"])]
+        if p.get("has_outline"):
+            try:
+                from shapely.geometry import shape
+                n = int(min(25, max(3, (p.get("area_km2") or 0) / 4)))
+                pts += _interior_points(shape(f["geometry"]), n)
+            except Exception:
+                pass
+        out.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "state": p["state"], "points": pts,
+                    "depth": estimate_waterbody_depth(p["kind"], p.get("area_km2"), p.get("mean_depth_m"))})
+    return tuple(out)
+
+
+
 def _interpolate_points(
     points: list[tuple[float, float, str]], spacing_deg: float = 0.05
 ) -> Iterator[tuple[float, float, str]]:
@@ -315,21 +370,16 @@ def generate_all_locations() -> list[dict]:
         for lat, lon, region in _interpolate_points(waypoints, spacing_deg=0.02):
             _add(f"{river_name}", lat, lon, region, "river")
 
-    # 3. Lakes — generate grid around each lake (5x5 grid per lake)
-    for name, lat, lon, region in _LAKES:
-        _add(name, lat, lon, region, "lake")
-        for dlat in [-0.02, -0.01, 0, 0.01, 0.02]:
-            for dlon in [-0.02, -0.01, 0, 0.01, 0.02]:
-                if dlat != 0 or dlon != 0:
-                    _add(f"{name}", round(lat + dlat, 5), round(lon + dlon, 5), region, "lake")
-
-    # 4. Reservoirs — grid around each (5x5)
-    for name, lat, lon, region in _RESERVOIRS:
-        _add(name, lat, lon, region, "reservoir")
-        for dlat in [-0.02, -0.01, 0, 0.01, 0.02]:
-            for dlon in [-0.02, -0.01, 0, 0.01, 0.02]:
-                if dlat != 0 or dlon != 0:
-                    _add(f"{name}", round(lat + dlat, 5), round(lon + dlon, 5), region, "reservoir")
+    # 3+4. Real named lakes & reservoirs (OpenStreetMap + Natural Earth; see scripts/build_waterbodies.py).
+    #      One point per body, plus interior sample points for bodies that have an outline.
+    for body in load_real_waterbodies():
+        for lat, lon in body["points"]:
+            key = f"{round(lat, 4)}:{round(lon, 4)}"
+            if key in seen:
+                continue
+            seen.add(key)
+            locations.append({"name": body["name"], "lat": lat, "lon": lon, "region": body["state"],
+                              "water_body_type": body["kind"], "depth": body["depth"], "wb_id": body["id"]})
 
     # 5. Ocean EEZ grid (~0.2° spacing for broad coverage)
     for lat, lon, region in _generate_ocean_grid(spacing=0.2):

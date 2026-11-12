@@ -12,6 +12,10 @@ import {
 } from '../services/api';
 import { Card, CardTitle, Badge, List, ListRow, Segmented, ChartTip, fadeUp } from '../components/ui';
 import { fmtNum, fmtDateTime, TYPE_BADGE, LEVEL_BADGE, LEVEL_COLOR } from '../lib/format';
+import { Star, Share2, FileDown } from 'lucide-react';
+import { useWatchlist, encodeShare } from '../lib/watchlist';
+import { printReport } from '../lib/export';
+import '../components/tools/print.css';
 import './LocationDetail.css';
 
 const num = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : '—');
@@ -71,6 +75,8 @@ export default function LocationDetail() {
   const navigate = useNavigate();
   const [horizon, setHorizon] = useState(48);
   const [copied, setCopied] = useState(false);
+  const wl = useWatchlist();
+  const [toast, setToast] = useState('');
 
   const [loc, retryLoc] = useSection(() => getLocationDetail(digipin), [digipin]);
   const [depth, retryDepth] = useSection(() => getCurrentDepth({ digipin }), [digipin]);
@@ -92,6 +98,18 @@ export default function LocationDetail() {
   const copy = () => {
     navigator.clipboard?.writeText(digipin).catch(() => {});
     setCopied(true); setTimeout(() => setCopied(false), 1400);
+  };
+
+  const pinned = wl.has(digipin);
+  const toggleWatch = () => {
+    if (!L) return;
+    wl.toggle({ digipin, name: L.name, lat: L.latitude, lon: L.longitude, type: L.water_body_type, region: L.region });
+    setToast(pinned ? 'Removed from watchlist' : 'Added to watchlist'); setTimeout(() => setToast(''), 1600);
+  };
+  const shareLink = async () => {
+    const url = `${window.location.origin}/location/${digipin}`;
+    try { await navigator.clipboard.writeText(url); setToast('Copied'); } catch { setToast('Copy failed'); }
+    setTimeout(() => setToast(''), 1600);
   };
 
   const fcData = useMemo(() => (fc.data?.forecast || []).slice(0, horizon).map((f) => ({
@@ -132,9 +150,20 @@ export default function LocationDetail() {
                 {digipin}{copied ? <Check style={{ color: 'var(--green)' }} /> : <Copy />}
               </button>
             </div>
+            <div className="ld-actions no-print">
+              <button className={`btn ${pinned ? 'tinted' : 'gray'}`} onClick={toggleWatch} aria-pressed={pinned} aria-label={pinned ? 'Remove from watchlist' : 'Add to watchlist'}>
+                <Star size={15} fill={pinned ? 'currentColor' : 'none'} />{pinned ? 'Watching' : 'Watchlist'}
+              </button>
+              <button className="btn gray" onClick={shareLink} aria-label="Share link"><Share2 size={15} />Share</button>
+              <button className="btn gray" onClick={printReport} aria-label="Export report"><FileDown size={15} />Export report</button>
+            </div>
           </>
         )}
       </motion.header>
+      <div className="print-only print-head">
+        <b>AquaDepth location report</b> — {L?.name} · {digipin} · generated {new Date().toLocaleString('en-IN')}
+      </div>
+      {toast && <div className="tl-toast" role="status">{toast}</div>}
 
       {/* Hero */}
       <motion.section className="ld-hero" {...fadeUp} transition={{ ...fadeUp.transition, delay: 0.05 }} aria-label="Current depth">
@@ -313,6 +342,9 @@ export default function LocationDetail() {
             </>
           ) : <Card><div className="ld-err"><AlertCircle size={18} />Altimetry unavailable.<button onClick={retrySat}>Retry</button></div></Card>}
         </div>
+      </div>
+      <div className="print-only print-foot">
+        Data sources: Open-Meteo (weather, marine, GloFAS discharge), harmonic tide model, AquaDepth depth-fusion and ML models. Depths are model estimates, not survey measurements; do not use for navigation or safety-critical decisions. Generated {new Date().toLocaleString('en-IN')}.
       </div>
     </div>
   );

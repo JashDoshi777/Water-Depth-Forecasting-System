@@ -1,30 +1,28 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence, animate } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { Search, X, Thermometer, CloudRain, Wind, Droplets, Waves, ChevronRight } from 'lucide-react';
-import { Badge, spring } from '../components/ui';
-import { TYPE_COLOR, TYPE_BADGE, fmtCompact, fmtM } from '../lib/format';
+import { Search, X, Layers } from 'lucide-react';
+import { spring } from '../components/ui';
+import { TYPE_COLOR, fmtCompact } from '../lib/format';
 import {
   getLocationsGeoJSON, getLocationStats, searchLocations,
   getCurrentDepth, getWeather, getTide, encodeDIGIPIN,
 } from '../services/api';
+import { getWaterbodiesGeoJSON, getCycloneSummary, getSurveyPriority } from '../services/api_map';
 import {
-  BASE_STYLE, addDataLayers, applyBasemap, applyDataTheme, applyFilter,
-  CLICK_LAYERS, rampCss, IOS_EASE,
+  BASE_STYLE, addDataLayers, addRealWaterbodies, applyBasemap, applyDataTheme, applyFilter,
+  setSurveyData, setSurveyVisible, CLICK_LAYERS, REAL_CLICK_LAYERS, rampCss, IOS_EASE,
 } from '../lib/mapStyle';
+import PlaceSheet from '../components/map/PlaceSheet';
+import LayersSheet, { WB_LAYERS } from '../components/map/LayersSheet';
+import ForecastScrubber from '../components/map/ForecastScrubber';
+import CycloneLayer from '../components/map/CycloneLayer';
 import './Dashboard.css';
 
 const INDIA = [79.0, 22.4];
 const BOUNDS = [[38, -12], [130, 48]]; // = wide bathymetry extent (free zoom-out, no visible image edge)
-const LAYERS = [
-  { key: 'all', label: 'All', color: null },
-  { key: 'ocean', label: 'Ocean', color: 'var(--blue)' },
-  { key: 'river', label: 'Rivers', color: 'var(--teal)' },
-  { key: 'lake', label: 'Lakes', color: 'var(--green)' },
-  { key: 'reservoir', label: 'Reservoirs', color: 'var(--purple)' },
-];
 
 async function fetchRivers() {
   const r = await fetch('/api/v1/map/rivers');
@@ -32,97 +30,23 @@ async function fetchRivers() {
   return r.json();
 }
 
-function CountUp({ value, digits = 1 }) {
-  const [v, setV] = useState(value);
-  const prev = useRef(0);
+function useMedia(q) {
+  const [m, setM] = useState(() => window.matchMedia(q).matches);
   useEffect(() => {
-    const c = animate(prev.current, value, {
-      duration: 0.9, ease: [0.32, 0.72, 0, 1],
-      onUpdate: (x) => { prev.current = x; setV(x); },
-    });
-    return () => c.stop();
-  }, [value]);
-  return <>{Number(v).toFixed(digits)}</>;
+    const mq = window.matchMedia(q); const h = () => setM(mq.matches);
+    mq.addEventListener('change', h); h();
+    return () => mq.removeEventListener('change', h);
+  }, [q]);
+  return m;
 }
 
-function Cell({ label, value }) {
-  return <div className="mp-cell"><span>{label}</span><b>{value}</b></div>;
-}
-
-function Panel({ loc, state, data, onClose, onRetry, onOpen }) {
-  const { depth, weather, tide } = data || {};
-  const signed = (n, d = 2) => (n == null ? '—' : `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(d)} m`);
-  return (
-    <motion.aside
-      className="map-panel material"
-      role="dialog" aria-label={`Details for ${loc.name}`}
-      initial={{ opacity: 0, x: 24, scale: 0.98 }} animate={{ opacity: 1, x: 0, scale: 1 }}
-      exit={{ opacity: 0, x: 24, scale: 0.98 }} transition={spring}
-    >
-      <div className="mp-head">
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="mp-title">{loc.name}</div>
-          <div className="mp-sub">{[loc.region, loc.type].filter(Boolean).join(' · ')}</div>
-        </div>
-        <button className="mp-close" aria-label="Close details" onClick={onClose}><X /></button>
-      </div>
-      <div className="mp-meta">
-        <Badge tone={TYPE_BADGE[loc.type]}>{loc.type}</Badge>
-        {loc.digipin && <span className="mono">{loc.digipin}</span>}
-        <span>{loc.lat.toFixed(3)}°N, {loc.lon.toFixed(3)}°E</span>
-      </div>
-
-      {state === 'error' ? (
-        <div className="mp-err" role="alert">
-          <p>Couldn’t load live conditions for this spot right now.</p>
-          <button className="btn tinted" onClick={onRetry}>Retry</button>
-        </div>
-      ) : state === 'loading' ? (
-        <>
-          <div className="mp-hero"><div className="lbl">Current depth</div><div className="skeleton" style={{ height: 52, width: 170, marginTop: 8, borderRadius: 12 }} /></div>
-          <div className="mp-grid">{[0, 1, 2, 3].map((i) => <div key={i} className="skeleton" style={{ height: 52, borderRadius: 12 }} />)}</div>
-          <div className="mp-inset">{[0, 1, 2, 3].map((i) => <div key={i} className="mp-row"><div className="skeleton" style={{ height: 14, width: '100%' }} /></div>)}</div>
-          <div className="mp-note">Fetching live depth model… this can take a few seconds.</div>
-        </>
-      ) : (
-        <>
-          {depth && (
-            <>
-              <div className="mp-hero">
-                <div className="lbl">Current depth</div>
-                <div className="num"><CountUp value={depth.computed_depth} /><small>m</small></div>
-              </div>
-              <div className="mp-grid">
-                <Cell label="Base depth" value={fmtM(depth.base_depth)} />
-                <Cell label="Tide" value={signed(depth.tidal_offset)} />
-                <Cell label="Rainfall" value={signed(depth.rainfall_impact)} />
-                <Cell label="Confidence" value={`${Math.round((depth.confidence ?? 0) * 100)}%`} />
-              </div>
-            </>
-          )}
-          {weather && (
-            <div className="mp-inset">
-              <div className="mp-row"><Thermometer />Temperature<em>{weather.temperature_c?.toFixed(1)}°C</em></div>
-              <div className="mp-row"><CloudRain />Rainfall<em>{weather.precipitation_mm?.toFixed(1)} mm</em></div>
-              <div className="mp-row"><Wind />Wind<em>{weather.wind_speed_ms?.toFixed(1)} m/s</em></div>
-              <div className="mp-row"><Droplets />Humidity<em>{weather.humidity_pct?.toFixed(0)}%</em></div>
-              {tide && loc.type === 'ocean' && (
-                <div className="mp-row"><Waves />Tide · {tide.tide_phase}<em>{tide.sea_level_m?.toFixed(2)} m · waves {tide.wave_height_m?.toFixed(1)} m</em></div>
-              )}
-            </div>
-          )}
-          {!depth && !weather && <div className="mp-note">No live data available.</div>}
-        </>
-      )}
-      <button className="btn block" onClick={onOpen} disabled={!loc.digipin}>
-        View full analysis <ChevronRight size={18} />
-      </button>
-    </motion.aside>
-  );
-}
-
-export default function Dashboard({ scheme = 'light' }) {
+export default function Dashboard({ scheme: themeScheme = 'light' }) {
   const navigate = useNavigate();
+  const mobile = useMedia('(max-width: 760px)');
+  const wrapRef = useRef(null);
+  const [parentH, setParentH] = useState(700);
+  const [mapStyle, setMapStyle] = useState('auto');
+  const scheme = mapStyle === 'auto' ? themeScheme : mapStyle;
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
@@ -134,6 +58,13 @@ export default function Dashboard({ scheme = 'light' }) {
   const [mapReady, setMapReady] = useState(false);
   const [points, setPoints] = useState(null);
   const [rivers, setRivers] = useState(null);
+  const [real, setReal] = useState(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [forecast, setForecast] = useState('off');
+  const [cyclones, setCyclones] = useState(false);
+  const [survey, setSurvey] = useState(false);
+  const [avail, setAvail] = useState({ forecast: true, cyclones: true, survey: true });
+  const [detentH, setDetentH] = useState(0);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [stats, setStats] = useState(null);
@@ -147,6 +78,7 @@ export default function Dashboard({ scheme = 'light' }) {
   // ── data ──
   const load = useCallback(async () => {
     setLoading(true); setFailed(false);
+    getWaterbodiesGeoJSON('all').then(setReal).catch(() => {}); // optional, non-blocking
     const [g, r, s] = await Promise.allSettled([getLocationsGeoJSON(), fetchRivers(), getLocationStats()]);
     if (g.status === 'fulfilled') {
       setPoints(g.value);
@@ -156,6 +88,19 @@ export default function Dashboard({ scheme = 'light' }) {
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // probe the optional overlay endpoints once so the sheet can disable what's missing
+  useEffect(() => {
+    getCycloneSummary().catch(() => setAvail((a) => ({ ...a, cyclones: false })));
+    getSurveyPriority(1).catch(() => setAvail((a) => ({ ...a, survey: false })));
+  }, []);
+
+  useEffect(() => {
+    const el = wrapRef.current; if (!el) return undefined;
+    const ro = new ResizeObserver(() => setParentH(el.clientHeight));
+    ro.observe(el); setParentH(el.clientHeight);
+    return () => ro.disconnect();
+  }, []);
 
   // ── fetch details for selected ──
   const fetchDetails = useCallback(async (loc) => {
@@ -183,7 +128,7 @@ export default function Dashboard({ scheme = 'light' }) {
       map.easeTo({
         center: [loc.lon, loc.lat],
         zoom: Math.max(map.getZoom(), loc.type === 'ocean' ? 7 : 9),
-        padding: wide ? { right: 380, top: 0, left: 0, bottom: 0 } : { bottom: 300, top: 0, left: 0, right: 0 },
+        padding: wide ? { right: 380, top: 0, left: 0, bottom: 0 } : { bottom: Math.round((wrapRef.current?.clientHeight || 700) * 0.5), top: 0, left: 0, right: 0 },
         duration: 1400, easing: IOS_EASE, essential: true,
       });
     }
@@ -214,6 +159,7 @@ export default function Dashboard({ scheme = 'light' }) {
       dragRotate: false, pitchWithRotate: false,
     });
     mapRef.current = map;
+    if (import.meta.env.DEV) window.__aquaMap = map; // test hook
     map.touchZoomRotate.disableRotation();
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
@@ -233,9 +179,11 @@ export default function Dashboard({ scheme = 'light' }) {
         { layers: [...CLICK_LAYERS, 'wb-rivers'].filter((l) => map.getLayer(l)) },
       );
       if (!feats.length) return;
-      const f = feats.find((x) => x.layer.id !== 'wb-bathy-dots') || feats[0];
+      const f = feats.find((x) => REAL_CLICK_LAYERS.includes(x.layer.id)) || feats.find((x) => x.layer.id !== 'wb-bathy-dots') || feats[0];
       const p = f.properties;
-      if (f.layer.id === 'wb-rivers') {
+      if (REAL_CLICK_LAYERS.includes(f.layer.id)) {
+        selectRef.current({ name: p.name, region: p.state, type: p.kind, lat: Number(p.lat), lon: Number(p.lon), digipin: p.digipin || undefined });
+      } else if (f.layer.id === 'wb-rivers') {
         selectRef.current({ name: p.name || 'River', region: 'River', type: 'river', lat: e.lngLat.lat, lon: e.lngLat.lng });
       } else {
         const [lon, lat] = f.geometry.coordinates;
@@ -243,7 +191,7 @@ export default function Dashboard({ scheme = 'light' }) {
       }
     });
     const hover = (on) => () => { map.getCanvas().style.cursor = on ? 'pointer' : ''; };
-    ['wb-bathy-dots', 'wb-lakes', 'wb-reservoirs', 'wb-rivers'].forEach((l) => {
+    ['wb-bathy-dots', 'wb-lakes', 'wb-reservoirs', 'wb-rivers', ...REAL_CLICK_LAYERS].forEach((l) => {
       map.on('mouseenter', l, hover(true)); map.on('mouseleave', l, hover(false));
     });
 
@@ -254,11 +202,22 @@ export default function Dashboard({ scheme = 'light' }) {
   useEffect(() => {
     const map = mapRef.current;
     if (!mapReady || !map || !points) return;
-    addDataLayers(map, scheme, points, rivers);
-    applyDataTheme(map, scheme);
+    addDataLayers(map, schemeRef.current, points, rivers);
+    if (real) addRealWaterbodies(map, schemeRef.current, real);
+    applyDataTheme(map, schemeRef.current);
     applyFilter(map, filterRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapReady, points, rivers]);
+  }, [mapReady, points, rivers, real]);
+
+  // survey priority (active learning) rings
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return undefined;
+    if (!survey) { setSurveyVisible(map, false); return undefined; }
+    let live = true;
+    getSurveyPriority(200).then((fc) => { if (live) { setSurveyData(map, schemeRef.current, fc); setSurveyVisible(map, true); } })
+      .catch(() => { if (live) { setAvail((a) => ({ ...a, survey: false })); setSurvey(false); } });
+    return () => { live = false; };
+  }, [mapReady, survey]);
 
   // theme
   useEffect(() => {
@@ -322,10 +281,10 @@ export default function Dashboard({ scheme = 'light' }) {
   ] : [];
 
   return (
-    <div className="map-wrap">
+    <div className={`map-wrap ${forecast !== 'off' ? 'fc-on' : ''} ${cyclones ? 'cy-on' : ''}`} ref={wrapRef}>
       <div ref={containerRef} className="map-canvas" data-testid="map-canvas" />
 
-      <div className="map-top">
+      <div className={`map-top ${selected && !mobile ? 'with-panel' : ''}`}>
         <div className="map-search material">
           <label className="search">
             <Search />
@@ -356,17 +315,27 @@ export default function Dashboard({ scheme = 'light' }) {
             )}
           </AnimatePresence>
         </div>
+        <button className={`layers-btn material ${sheetOpen ? 'on' : ''}`} aria-label="Layers" aria-haspopup="dialog" aria-expanded={sheetOpen}
+          onClick={() => setSheetOpen((o) => !o)}><Layers /></button>
       </div>
 
-      <div className="map-layers material" role="group" aria-label="Map layers">
-        {LAYERS.map((l) => (
+      <AnimatePresence>
+        {sheetOpen && (
+          <LayersSheet filter={filter} setFilter={setFilter} forecast={forecast} setForecast={setForecast}
+            cyclones={cyclones} setCyclones={setCyclones} survey={survey} setSurvey={setSurvey}
+            mapStyle={mapStyle} setMapStyle={setMapStyle} avail={avail} onClose={() => setSheetOpen(false)} />
+        )}
+      </AnimatePresence>
+
+      {!sheetOpen && !(selected && !mobile) && <div className="map-layers material" role="group" aria-label="Map layers">
+        {WB_LAYERS.map((l) => (
           <button key={l.key} className={filter === l.key ? 'active' : ''} aria-pressed={filter === l.key}
             aria-label={`Show ${l.label}`} onClick={() => setFilter(l.key)}>
             <span className={`swatch ${l.key === 'all' ? 'all' : ''}`} style={l.color ? { background: l.color } : undefined} />
             {l.label}
           </button>
         ))}
-      </div>
+      </div>}
 
       {stats && (
         <div className="map-stats material" aria-label="Water body statistics">
@@ -382,9 +351,18 @@ export default function Dashboard({ scheme = 'light' }) {
         </div>
       )}
 
+      {mapReady && <CycloneLayer map={mapRef.current} ready={mapReady} scheme={scheme} active={cyclones} hidden={!!selected}
+        onUnavailable={() => setAvail((a) => ({ ...a, cyclones: false }))} />}
+
+      {mapReady && forecast !== 'off' && (
+        <div className="map-bottom" style={selected ? { display: 'none' } : undefined}>
+          <ForecastScrubber map={mapRef.current} ready={mapReady} variable={forecast} onVariable={setForecast} />
+        </div>
+      )}
+
       <AnimatePresence>
         {selected && (
-          <Panel key="panel" loc={selected} state={state} data={data} onClose={close}
+          <PlaceSheet key="panel" loc={selected} state={state} data={data} onClose={close} mobile={mobile} parentH={parentH}
             onRetry={() => fetchDetails(selected)} onOpen={() => navigate(`/location/${selected.digipin}`)} />
         )}
       </AnimatePresence>

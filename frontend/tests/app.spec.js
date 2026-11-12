@@ -87,7 +87,7 @@ test.describe('Desktop UI', () => {
     const errors = collectErrors(page);
     await page.goto('/');
     await expect(page.getByTestId('map-canvas')).toBeVisible();
-    await expect(page.getByLabel('Water body statistics')).toContainText('95.9K');
+    await expect(page.getByLabel('Water body statistics')).toContainText('96.2K');
     await page.getByLabel('Search water bodies').fill('Godavari');
     await page.locator('.map-result').first().click();
     const panel = page.getByRole('dialog');
@@ -203,6 +203,7 @@ test.describe('Mobile UI (iOS tab bar)', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
   test('tab bar + More sheet, no horizontal overflow', async ({ page }) => {
+    test.setTimeout(240_000); // visits 6 pages; slower when run alongside other workers
     await page.goto('/analytics');
     const tabs = page.getByRole('navigation', { name: 'Tab bar' });
     await expect(tabs).toBeVisible();

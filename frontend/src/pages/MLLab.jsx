@@ -1,9 +1,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { ResponsiveContainer, ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, BarChart, Bar, Legend } from 'recharts';
-import { BrainCircuit, Gauge, Cpu, Waves, TrendingUp, AlertTriangle, CheckCircle2, XCircle, Layers, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { BrainCircuit, Gauge, Cpu, Waves, TrendingUp, AlertTriangle, CheckCircle2, XCircle, Layers, RefreshCw, ShieldCheck, Crosshair, ChevronRight } from 'lucide-react';
 import { PageHeader, Card, CardTitle, Stat, Badge, IconChip, ChartTip, fadeUp, Loading, EmptyState } from '../components/ui';
 import { getMLOverview, mlForecast, mlFlood, mlStaticDepth, encodeDIGIPIN } from '../services/api';
+import { getValidationSummary, getSurveyPriority } from '../services/api_ml';
 import { fmtNum } from '../lib/format';
 import './MLLab.css';
 
@@ -44,7 +46,10 @@ export default function MLLab() {
   const [err, setErr] = useState(null);
   const [place, setPlace] = useState(PLACES[0]);
   const [demo, setDemo] = useState({ loading: true });
+  const [val, setVal] = useState(null);
+  const [survey, setSurvey] = useState({ loading: true });
 
+  useEffect(() => { getValidationSummary().then(setVal).catch(() => setVal({ error: true })); getSurveyPriority(10).then((d) => setSurvey({ d })).catch(() => setSurvey({ error: true })); }, []);
   useEffect(() => { getMLOverview().then(setOv).catch((e) => setErr(e?.response?.data?.detail || 'ML report unavailable')); }, []);
 
   const run = useCallback(async (p) => {
@@ -80,6 +85,18 @@ export default function MLLab() {
         <Stat label="Forecast training rows" icon={Cpu} color="var(--purple)" value={fmtNum(F.n_train)} foot={`${F.n_features} features · 3 years hourly`} />
         <Stat label="Last trained" icon={RefreshCw} color="var(--teal)" value={new Date(M.generated_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} foot={`${Math.round(M.train_seconds)} s on CPU`} />
       </div>
+
+      <Link to="/validation" className="card interactive ml-valid" data-testid="ml-validated" style={{ marginBottom: 14 }}>
+        <div className="ml-valid-main">
+          <IconChip lg icon={ShieldCheck} color="var(--green)" />
+          <div>
+            <h3>Validated against real tide gauges</h3>
+            <p>{val?.headline ? `${val.headline.n_gauges} UHSLC gauges across India and neighbours. Sea level only: depth labels were simulated, so depth itself is not validated. High-tide timing misses the 15 min target.` : 'Comparison with UHSLC tide-gauge observations.'}</p>
+          </div>
+        </div>
+        {val?.headline ? <div className="ml-valid-num" aria-label="Median sea-level correlation with gauges">r = {m3(val.headline.median_corr, 2)}<small>· RMSE {m3(val.headline.median_rmse_m, 2)} m</small></div> : <div className="skeleton" style={{ height: 30, width: 120 }} />}
+        <span className="ml-valid-link">See validation <ChevronRight size={14} style={{ verticalAlign: -2 }} /></span>
+      </Link>
 
       <div className="section-title">Models</div>
       <div className="grid c3">
@@ -179,6 +196,29 @@ export default function MLLab() {
           </Card>
         </div>
       </div>
+
+      <div className="section-title">Where to survey next</div>
+      <Card data-testid="ml-survey">
+        <CardTitle icon={Crosshair} color="var(--indigo)" sub="Active learning: the static-depth model is an ensemble of 8 boosters, each trained on a different resample of a sparse 10% of the seabed grid. Where they disagree most, a new sounding would teach the model the most.">Highest-uncertainty ocean cells</CardTitle>
+        {survey.loading ? <div className="skeleton" style={{ height: 300 }} /> : survey.error ? <EmptyState icon={AlertTriangle} title="Survey ranking unavailable">Run <span className="mono">python -m app.ml.survey</span> in backend/.</EmptyState> : (
+          <div className="list" style={{ boxShadow: 'none', background: 'var(--bg-inset)' }} data-testid="survey-list">
+            {survey.d.features.map((ft) => {
+              const [lon, lat] = ft.geometry.coordinates, p = ft.properties;
+              return (
+                <div className="list-row" key={p.rank}>
+                  <span className="badge indigo tnum" style={{ minWidth: 34, justifyContent: 'center' }}>{p.rank}</span>
+                  <div className="list-main">
+                    <div className="list-title tnum">{lat.toFixed(2)}°N, {lon.toFixed(2)}°E</div>
+                    <div className="list-detail tnum">± {p.uncertainty_m.toFixed(0)} m uncertainty · predicted depth {fmtNum(p.predicted_depth_m)} m</div>
+                  </div>
+                  <Link className="ml-survey-link" to={`/?lat=${lat}&lon=${lon}&layer=survey`}>Show on map</Link>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <p className="ml-note ml-survey-note">The uncertainty is the ensemble members' disagreement on sparse data, expressed in metres, so it is largest over the deep ocean. It is not a measured error: the true error can be larger or smaller{survey.d?.metadata && ` (on randomly held-out cells the disagreement correlates with the actual error at r = ${m3(survey.d.metadata.corr_uncertainty_vs_abs_error, 2)})`}. Actual survey planning also depends on shipping lanes, ports and hazards, which the model does not know about.</p>
+      </Card>
 
       <div className="section-title">Architecture</div>
       <Card>

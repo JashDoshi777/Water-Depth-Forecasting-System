@@ -1,17 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { Map, TrendingUp, Compass, BarChart3, AlertTriangle, Database, Droplets, BrainCircuit, MoreHorizontal, Sun, Moon, Monitor } from 'lucide-react';
+import { Map, TrendingUp, Compass, BarChart3, AlertTriangle, Database, Droplets, BrainCircuit, MoreHorizontal, Sun, Moon, Monitor, Star, GitCompare, LifeBuoy, ShieldCheck, Code } from 'lucide-react';
 import { Segmented, Sheet, List, ListRow } from './ui';
 import { useNavigate } from 'react-router-dom';
 
 export const NAV = [
-  { to: '/', icon: Map, label: 'Map', tab: true },
-  { to: '/forecast', icon: TrendingUp, label: 'Forecast', tab: true },
-  { to: '/alerts', icon: AlertTriangle, label: 'Alerts', tab: true },
-  { to: '/analytics', icon: BarChart3, label: 'Insights', tab: true },
-  { to: '/locations', icon: Compass, label: 'Locations' },
-  { to: '/ml-lab', icon: BrainCircuit, label: 'ML Lab' },
-  { to: '/data-sources', icon: Database, label: 'Data Sources' },
+  { to: '/', icon: Map, label: 'Map', tab: true, group: 'Explore' },
+  { to: '/forecast', icon: TrendingUp, label: 'Forecast', tab: true, group: 'Explore' },
+  { to: '/alerts', icon: AlertTriangle, label: 'Alerts', tab: true, group: 'Explore' },
+  { to: '/analytics', icon: BarChart3, label: 'Insights', tab: true, group: 'Explore' },
+  { to: '/locations', icon: Compass, label: 'Locations', group: 'Explore' },
+  { to: '/watchlist', icon: Star, label: 'Watchlist', group: 'Tools' },
+  { to: '/compare', icon: GitCompare, label: 'Compare', group: 'Tools' },
+  { to: '/safety', icon: LifeBuoy, label: 'Safety', group: 'Tools' },
+  { to: '/ml-lab', icon: BrainCircuit, label: 'ML Lab', group: 'System' },
+  { to: '/validation', icon: ShieldCheck, label: 'Validation', group: 'System' },
+  { to: '/data-sources', icon: Database, label: 'Data Sources', group: 'System' },
+  { to: '/developers', icon: Code, label: 'Developers', group: 'System' },
 ];
 
 const THEMES = [
@@ -40,17 +45,15 @@ export default function Sidebar({ theme }) {
         <Droplets size={18} strokeWidth={2.2} />
         <span className="brand-name">AquaDepth</span>
       </div>
-      <div className="sidebar-label">Explore</div>
-      {NAV.slice(0, 5).map(({ to, icon: Icon, label }) => (
-        <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
-          <Icon />{label}
-        </NavLink>
-      ))}
-      <div className="sidebar-label">System</div>
-      {NAV.slice(5).map(({ to, icon: Icon, label }) => (
-        <NavLink key={to} to={to} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
-          <Icon />{label}
-        </NavLink>
+      {['Explore', 'Tools', 'System'].map((g) => (
+        <React.Fragment key={g}>
+          <div className="sidebar-label">{g}</div>
+          {NAV.filter((n) => n.group === g).map(({ to, icon: Icon, label }) => (
+            <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+              <Icon />{label}
+            </NavLink>
+          ))}
+        </React.Fragment>
       ))}
       <div className="sidebar-spacer" />
       <div className="theme-switch">

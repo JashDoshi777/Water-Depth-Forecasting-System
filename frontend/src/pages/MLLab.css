@@ -22,3 +22,15 @@
 .ml-arch li::before { content: counter(s); flex-shrink: 0; width: 24px; height: 24px; border-radius: 12px; background: var(--blue-tint); color: var(--blue); font-size: 13px; font-weight: 600; display: grid; place-items: center; }
 .ml-arch small { display: block; color: var(--label-2); font-size: 12.5px; }
 @media (max-width: 820px) { .ml-model-head { flex-wrap: wrap; } }
+
+/* ── validation + survey additions ── */
+.ml-valid { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; justify-content: space-between; text-decoration: none; color: inherit; }
+.ml-valid-main { display: flex; align-items: center; gap: 14px; min-width: 0; flex: 1 1 280px; }
+.ml-valid h3 { font-size: 17px; font-weight: 600; letter-spacing: -0.022em; }
+.ml-valid p { font-size: 13px; color: var(--label-2); line-height: 1.4; margin-top: 2px; }
+.ml-valid-num { font-size: 28px; font-weight: 700; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+.ml-valid-num small { font-size: 14px; font-weight: 500; color: var(--label-2); margin-left: 3px; }
+.ml-valid-link { font-size: 15px; color: var(--blue); font-weight: 500; white-space: nowrap; }
+.ml-survey-link { font-size: 14px; color: var(--blue); font-weight: 500; white-space: nowrap; text-decoration: none; }
+.ml-survey-link:active { opacity: .6; }
+.ml-survey-note { margin: 12px 4px 0; }

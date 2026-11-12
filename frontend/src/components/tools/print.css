@@ -1,0 +1,16 @@
+.print-only { display: none; }
+@media print {
+  @page { margin: 14mm; }
+  html, body, .app, .main { height: auto !important; overflow: visible !important; background: #fff !important; color: #000; }
+  .sidebar, .tabbar, .no-print, .ld-back, .tl-toast, .cp-back, .segmented, .ld-copy svg { display: none !important; }
+  .print-only { display: block !important; }
+  .print-head { font-size: 12pt; border-bottom: 1px solid #999; padding-bottom: 6pt; margin-bottom: 10pt; }
+  .print-foot { font-size: 9pt; color: #444; border-top: 1px solid #999; padding-top: 6pt; margin-top: 14pt; }
+  .page { max-width: none; padding: 0 !important; animation: none !important; }
+  .card, .list { box-shadow: none !important; border: 0.5px solid #bbb; break-inside: avoid; background: #fff !important; }
+  .grid.c2 { grid-template-columns: 1fr 1fr; }
+  .ld-hero { grid-template-columns: 1fr 1fr; }
+  .skeleton { display: none; }
+  .ld-chart { height: 220px !important; }
+  * { animation: none !important; transition: none !important; }
+}
