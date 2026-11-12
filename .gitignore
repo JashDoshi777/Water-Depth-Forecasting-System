@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Build outputs
+frontend/dist/
+*.egg-info/
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data / Models
+data/
+models/*.pkl
+models/*.json
+*.h5
+
+# Logs
+*.log
+
+# Playwright / test output
+frontend/test-results/
+frontend/playwright-report/
+frontend/e2e-shots/
