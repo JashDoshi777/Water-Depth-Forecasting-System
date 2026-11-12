@@ -1,0 +1,152 @@
+{
+  "generated_at": "2026-11-12T18:10:48Z",
+  "static_depth": {
+    "task": "Task 1 \u2014 Static depth prediction",
+    "algorithm": "XGBoost (gradient-boosted trees) on log-depth",
+    "data": "NOAA ETOPO bathymetry, 0.05\u00b0 grid (real). Sparse 10% sample of ocean cells for training.",
+    "features": [
+      "lat",
+      "lon",
+      "geodesic shore distance (pyproj.Geod)",
+      "river distance",
+      "seasonal rain",
+      "direction to shore",
+      "coastal relief (land elevation mirrored across the shoreline)",
+      "shoreline terrain slope"
+    ],
+    "n_train": 11289,
+    "interpolation_test": {
+      "n": 20000,
+      "mae_m": 101.24776458740234,
+      "median_abs_err_m": 39.29156494140625,
+      "mae_shelf_lt200m": 26.618284225463867,
+      "rmse_m": 197.93263244628906,
+      "rel_err_pct": 2.281582832336426
+    },
+    "spatial_block_test": {
+      "n": 37840,
+      "mae_m": 294.87872314453125,
+      "median_abs_err_m": 89.9952392578125,
+      "mae_shelf_lt200m": 151.41671752929688,
+      "rmse_m": 556.8020629882812,
+      "rel_err_pct": 3.9860215187072754
+    },
+    "baseline_shelf_heuristic_spatial_test": {
+      "mae_m": 2132.2761528589526,
+      "mae_shelf_lt200m": 219.88267708728492
+    },
+    "target": "MAE < 0.3 m",
+    "target_met": false,
+    "note": "0.3 m is infeasible at 5.5 km grid resolution \u2014 would need 10\u2013100 m INCOIS/NHO surveys. Errors are reported honestly in metres."
+  },
+  "forecast": {
+    "task": "Task 2 \u2014 Temporal depth forecasting (1\u201348 h)",
+    "algorithm": "XGBoost direct multi-horizon + quantile (P10/P90) bands",
+    "data": "34 sites \u00d7 ~3 years hourly: ERA5 rainfall, Open-Meteo Marine sea level, GloFAS discharge (real). Depth labels = physics-simulated (no public gauge network).",
+    "n_train": 1011360,
+    "n_features": 43,
+    "test_period": "2026-05-01 \u2192 2026-11 (includes the 2026 monsoon)",
+    "mae_m_by_horizon": {
+      "seen": {
+        "1\u20136 h": {
+          "ml": 0.0772573039198954,
+          "persist": 0.2994763699820553,
+          "analog": 0.21182106658707847
+        },
+        "7\u201324 h": {
+          "ml": 0.10857110309120138,
+          "persist": 0.3601014837637761,
+          "analog": 0.21391734288186964
+        },
+        "25\u201348 h": {
+          "ml": 0.12922590960904884,
+          "persist": 0.4468370726972835,
+          "analog": 0.37267212092833185
+        },
+        "interval_coverage_80pct": 0.7547470238095239
+      },
+      "unseen": {
+        "1\u20136 h": {
+          "ml": 0.2121973405740653,
+          "persist": 0.28574616746929626,
+          "analog": 0.16914130811146727
+        },
+        "7\u201324 h": {
+          "ml": 0.2246631694274946,
+          "persist": 0.3205712692686047,
+          "analog": 0.1610533632775048
+        },
+        "25\u201348 h": {
+          "ml": 0.24067692918691586,
+          "persist": 0.3706667418779239,
+          "analog": 0.28505277963406067
+        },
+        "interval_coverage_80pct": 0.5737361111111111
+      }
+    },
+    "tide_phase_error_min": {
+      "median": 21.059660704334462,
+      "mean": 47.236205229586275,
+      "p90": 75.55403143486399,
+      "n_peaks": 2975
+    },
+    "target": "tide phase error < 15 min",
+    "target_met": false,
+    "note": "Training uses realised rainfall as a stand-in for the NWP rainfall forecast (at serving time Open-Meteo's forecast is used).",
+    "top_features": [
+      [
+        "sea_lag0",
+        0.35350146889686584
+      ],
+      [
+        "sea_lag25",
+        0.05772090330719948
+      ],
+      [
+        "tide_M2_sin",
+        0.04567469283938408
+      ],
+      [
+        "lon",
+        0.04270785301923752
+      ],
+      [
+        "type",
+        0.04212616756558418
+      ],
+      [
+        "rain_future_h",
+        0.03907125070691109
+      ],
+      [
+        "depth_anom_now",
+        0.03486967086791992
+      ],
+      [
+        "lat",
+        0.029781674966216087
+      ]
+    ]
+  },
+  "flood": {
+    "task": "Task 3 \u2014 Extreme-event (flood) prediction",
+    "algorithm": "Bootstrap ensemble of 5 XGBoost classifiers (probability + epistemic uncertainty)",
+    "label": "Flood-warning onset (real data): GloFAS discharge crossing the site p95 within 48 h, OR sea-level surge crossing p99 within 24 h, OR \u2265 64.5 mm rain in 24 h (IMD heavy-rain class)",
+    "n_train": 121856,
+    "n_test": 25432,
+    "base_rate_test": 0.06019974834853727,
+    "positives_test": 1531,
+    "threshold": 0.28,
+    "precision": 0.4403048264182896,
+    "recall": 0.3396472893533638,
+    "f1": 0.3834808259587021,
+    "pr_auc": 0.3717047382963402,
+    "brier": 0.04569806158542633,
+    "mean_uncertainty": 0.013020047917962074,
+    "mean_uncertainty_on_errors": 0.04442179948091507,
+    "target": "precision > 0.85",
+    "target_met": false,
+    "note": "Drought detection (F1 > 0.7) and GNN modelling are not implemented; labels derive from real GloFAS/ERA5/marine-model series, not field flood reports."
+  },
+  "train_seconds": 137.9
+}

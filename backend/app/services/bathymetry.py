@@ -239,9 +239,25 @@ def estimate_base_depth(
 
 def _estimate_ocean_depth(lat: float, lon: float) -> float:
     """
-    Estimate ocean depth using continental shelf profile.
-    Uses exponential depth-distance relationship.
+    Ocean depth. Uses REAL NOAA ETOPO bathymetry (0.05° grid, bilinear) when the
+    point is over water in the grid; otherwise falls back to a shelf-profile model.
     """
+    try:
+        from app.ml.geo import get_grid
+        grid = get_grid()
+        if grid is not None:
+            z = float(grid.elevation(lat, lon))
+            if z < -1.0:
+                return -z
+            if z <= 15.0:  # coastal cell straddling the shoreline: shallow water
+                return max(1.5, 3.0 + abs(z) * 0.5)
+    except Exception:
+        pass
+    return _shelf_profile_depth(lat, lon)
+
+
+def _shelf_profile_depth(lat: float, lon: float) -> float:
+    """Heuristic continental-shelf profile (fallback + ML baseline)."""
     shore_dist = estimate_shore_distance(lat, lon)
     region = _get_ocean_region(lat, lon)
     profile = _SHELF_PROFILES.get(region, _SHELF_PROFILES["bay_of_bengal"])

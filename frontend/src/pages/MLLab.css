@@ -1,0 +1,24 @@
+.ml .ml-tiles { margin-bottom: 14px; }
+.ml-model { display: flex; flex-direction: column; gap: 12px; }
+.ml-model-head { display: flex; align-items: flex-start; gap: 12px; }
+.ml-model h3 { font-size: 17px; }
+.ml-model .ml-algo { font-size: 13px; color: var(--label-2); margin-top: 2px; }
+.ml-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.ml-kv > div { background: var(--bg-inset); border-radius: 12px; padding: 10px 12px; }
+.ml-kv b { display: block; font-size: 20px; font-weight: 700; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.ml-kv span { font-size: 12px; color: var(--label-2); }
+.ml-note { font-size: 12.5px; color: var(--label-2); line-height: 1.45; }
+.ml-target { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.ml-demo-head { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.ml-chip { height: 32px; padding: 0 14px; border-radius: 16px; font-size: 14px; font-weight: 500; background: var(--fill-3); color: var(--label); transition: background .15s, transform .2s var(--ease); }
+.ml-chip:active { transform: scale(.96); }
+.ml-chip.active { background: var(--blue); color: #fff; }
+.ml-gauge { position: relative; width: 132px; height: 132px; margin: 0 auto; }
+.ml-gauge > div { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.ml-gauge b { font-size: 26px; font-weight: 700; letter-spacing: -0.04em; }
+.ml-gauge span { font-size: 11px; color: var(--label-2); }
+.ml-arch { list-style: none; counter-reset: s; display: grid; gap: 10px; }
+.ml-arch li { counter-increment: s; display: flex; gap: 12px; align-items: flex-start; font-size: 14px; }
+.ml-arch li::before { content: counter(s); flex-shrink: 0; width: 24px; height: 24px; border-radius: 12px; background: var(--blue-tint); color: var(--blue); font-size: 13px; font-weight: 600; display: grid; place-items: center; }
+.ml-arch small { display: block; color: var(--label-2); font-size: 12.5px; }
+@media (max-width: 820px) { .ml-model-head { flex-wrap: wrap; } }

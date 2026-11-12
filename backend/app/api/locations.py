@@ -16,6 +16,7 @@ from app.services.digipin_grid import (
     generate_all_locations,
     generate_locations_in_bbox,
     get_location_count,
+    _RIVERS,
 )
 
 router = APIRouter(prefix="/locations", tags=["Locations"])
@@ -235,9 +236,52 @@ def _build_geojson() -> dict:
                 "n": loc["name"],
                 "r": loc.get("region", ""),
                 "t": wb,
+                "d": round(float(estimate_base_depth(loc["lat"], loc["lon"], wb)), 1),
             },
         })
     return {"type": "FeatureCollection", "features": features}
+
+
+def _catmull_rom(pts: list[tuple[float, float]], samples: int = 10) -> list[list[float]]:
+    """Smooth a polyline through its waypoints (centripetal-ish Catmull-Rom, [lon, lat])."""
+    out: list[list[float]] = []
+    n = len(pts)
+    for i in range(n - 1):
+        p0 = pts[max(i - 1, 0)]
+        p1, p2 = pts[i], pts[i + 1]
+        p3 = pts[min(i + 2, n - 1)]
+        for k in range(samples):
+            t = k / samples
+            t2, t3 = t * t, t * t * t
+            out.append([
+                round(0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2
+                             + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3), 4),
+                round(0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2
+                             + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3), 4),
+            ])
+    out.append([round(pts[-1][0], 4), round(pts[-1][1], 4)])
+    return out
+
+
+@lru_cache(maxsize=1)
+def _build_rivers() -> dict:
+    """River centre-lines as LineStrings (one per river) built from waypoints."""
+    features = []
+    for name, pts in _RIVERS.items():
+        if len(pts) < 2:
+            continue
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "LineString", "coordinates": _catmull_rom([(p[1], p[0]) for p in pts])},
+            "properties": {"name": name},
+        })
+    return {"type": "FeatureCollection", "features": features}
+
+
+@router.get("/rivers")
+async def get_rivers_geojson():
+    """GeoJSON LineStrings for every river — smooth map rendering."""
+    return _build_rivers()
 
 
 @router.get("/geojson")

@@ -25,8 +25,9 @@ Thumbs.db
 
 # Data / Models
 data/
+!backend/app/data/
+backend/data_cache/
 models/*.pkl
-models/*.json
 *.h5
 
 # Logs

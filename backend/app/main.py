@@ -39,6 +39,15 @@ async def lifespan(app: FastAPI):
 
     db_task = asyncio.create_task(_init_db_bg())
 
+    # Build the 96K-location grid + map GeoJSON before serving (it blocks for several
+    # seconds); do it in a worker thread so startup isn't a frozen event loop.
+    try:
+        from app.api import locations as _loc
+        await asyncio.to_thread(_loc._get_all_locations_cached)
+        await asyncio.to_thread(_loc._build_geojson)
+    except Exception as e:
+        print(f"Grid pre-build skipped: {e}")
+
     async def _warm_cache():
         # Pre-compute the alert scan so the first Alerts/Analytics visit is instant.
         try:
@@ -83,6 +92,15 @@ app.add_middleware(
 
 # ── API Routes ──
 app.include_router(api_router)
+
+
+# ── Spec endpoint: POST /api/forecast {"digipin": "...", "timestamp": "..."} ──
+from app.api.ml import ForecastRequest, run_forecast  # noqa: E402
+
+
+@app.post("/api/forecast", tags=["ML"])
+async def forecast_alias(req: ForecastRequest):
+    return await run_forecast(req)
 
 
 # ── Health check ──

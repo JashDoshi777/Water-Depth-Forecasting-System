@@ -35,3 +35,4 @@ cachetools>=5.5.0,<6.0.0
 
 # ── WebSocket ──
 websockets>=14.0
+pillow>=10.0.0

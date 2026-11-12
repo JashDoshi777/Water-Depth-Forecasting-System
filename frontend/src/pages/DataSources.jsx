@@ -1,261 +1,165 @@
-import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { getSystemStatus } from '../services/api';
+import React, { useEffect, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Database, Globe, Waves, Layers, Compass, Radio,
-  CheckCircle2, AlertCircle, Clock, Zap, Server,
-  Activity, Cpu, HardDrive, Satellite,
+  CloudSun, Waves, Droplets, Anchor, Mountain, Grid3x3, ChevronDown, ArrowRight, WifiOff,
+  CheckCircle2, CircleDashed, Info, Activity, Database, Timer,
 } from 'lucide-react';
+import { PageHeader, Card, Stat, Badge, List, EmptyState, fadeUp } from '../components/ui';
+import { fmtNum } from '../lib/format';
+import { getSystemStatus } from '../services/api';
+import './DataSources.css';
 
-const fadeUp = { initial: { opacity: 0, y: 16 }, animate: { opacity: 1, y: 0 } };
-
-const DATA_SOURCES = [
-  {
-    name: 'Open-Meteo Weather',
-    key: 'open_meteo_weather',
-    description: 'Weather data: temperature, precipitation, wind speed, humidity, pressure. Provides real-time and historical meteorological data from ERA5 reanalysis.',
-    icon: Globe,
-    color: 'var(--accent-green)',
-    bg: 'var(--accent-green-dim)',
-    features: ['Temperature (°C)', 'Precipitation (mm/h)', 'Wind Speed (m/s)', 'Humidity (%)', 'Pressure (hPa)', '72h Rolling Rainfall'],
-    resolution: '0.25° grid (~25km)',
-    update: 'Hourly',
-    type: 'Weather',
-  },
-  {
-    name: 'StormGlass Marine',
-    key: 'stormglass',
-    description: 'Ocean tide and marine data: sea level, tide phase, wave height, wave period. Uses multiple maritime forecast models.',
-    icon: Waves,
-    color: 'var(--accent-blue)',
-    bg: 'var(--accent-blue-dim)',
-    features: ['Sea Level (m)', 'Tide Phase', 'Wave Height (m)', 'Wave Period (s)', 'Tidal Predictions', 'Neap/Spring Cycle'],
-    resolution: 'Point-based',
-    update: 'Hourly',
-    type: 'Tidal',
-  },
-  {
-    name: 'OpenTopography GEBCO',
-    key: 'opentopography',
-    description: 'Global bathymetry data from SRTM15+. Provides seafloor topography and base depth measurements for oceans and coastal regions.',
-    icon: Layers,
-    color: 'var(--accent-teal)',
-    bg: 'var(--accent-teal-dim)',
-    features: ['Base Depth (m)', 'Seafloor Topography', 'SRTM15+ DEM', 'Coastal Elevation', 'Resolution: 10-100m', 'Global Coverage'],
-    resolution: '~450m (15 arc-sec)',
-    update: 'Static dataset',
-    type: 'Bathymetry',
-  },
-  {
-    name: 'DIGIPIN Grid Engine',
-    key: 'digipin_grid',
-    description: 'Procedural generation of 95K+ geocoded monitoring locations across Indian coastline, major rivers, lakes, and reservoirs.',
-    icon: Compass,
-    color: 'var(--accent-purple)',
-    bg: 'var(--accent-purple-dim)',
-    features: ['95K+ Locations', 'Lat/Lon Encoding', 'Water Body Classification', 'Coastal Coverage', 'River Corridors', 'Lake/Reservoir Mapping'],
-    resolution: '0.1° spacing (~11km)',
-    update: 'Computed on startup',
-    type: 'Geospatial',
-  },
-  {
-    name: 'Satellite Altimetry (derived)',
-    key: 'open_meteo_marine',
-    description: 'Sea-surface-height indicators derived from Open-Meteo Marine model output (not direct Jason-3 / SARAL telemetry).',
-    icon: Satellite,
-    color: 'var(--accent-orange)',
-    bg: 'var(--accent-orange-dim)',
-    features: ['Sea Surface Height', 'Jason-3 Data', 'SARAL/AltiKa', 'Significant Wave Height', 'Wind Speed', 'Orbit Pass Data'],
-    resolution: 'Along-track ~7km',
-    update: '10-day cycle',
-    type: 'Satellite',
-  },
-  {
-    name: 'GloFAS River Discharge',
-    key: 'open_meteo_flood',
-    description: 'Modelled river discharge from the GloFAS system via the Open-Meteo Flood API. Drives inland depth and flood-risk scoring.',
-    icon: Activity,
-    color: 'var(--accent-cyan)',
-    bg: 'var(--accent-cyan-dim)',
-    features: ['River Discharge (m³/s)', 'Flow Rate', 'Basin Connectivity', 'Monsoon Index', 'Seasonal Variation', 'Flood Indicators'],
-    resolution: 'Station-based',
-    update: 'Daily',
-    type: 'Hydrological',
-  },
+const SOURCES = [
+  { key: 'open_meteo_weather', icon: CloudSun, color: 'var(--blue)', name: 'Open-Meteo Weather', role: 'Rainfall, pressure, wind, temperature',
+    desc: 'Hourly and daily forecasts from ECMWF and GFS models, plus reanalysis history. Drives the rainfall term of the depth model.' },
+  { key: 'open_meteo_marine', icon: Waves, color: 'var(--teal)', name: 'Open-Meteo Marine', role: 'Waves, sea level, satellite-style altimetry',
+    desc: 'WAM wave model output. Our “satellite altimetry” layer is derived from this marine model, not from a direct altimeter feed.' },
+  { key: 'open_meteo_flood', icon: Droplets, color: 'var(--indigo)', name: 'Open-Meteo Flood (GloFAS)', role: 'River discharge',
+    desc: 'Modelled river discharge from the Global Flood Awareness System, served through Open-Meteo. Not gauge-station measurements.' },
+  { key: 'stormglass', icon: Anchor, color: 'var(--purple)', name: 'StormGlass', role: 'Tide heights and extremes',
+    desc: 'Tidal predictions for coastal points. Requires an API key; shown as configured when the key is present.' },
+  { key: 'opentopography', icon: Mountain, color: 'var(--green)', name: 'OpenTopography', role: 'Terrain and bathymetry',
+    desc: 'Elevation datasets for terrain context. Depth baselines currently use a GEBCO-style bathymetry model.' },
+  { key: 'digipin_grid', icon: Grid3x3, color: 'var(--orange)', name: 'DIGIPIN Grid', role: 'Location addressing',
+    desc: 'India Post’s 10-character geocode, computed locally with no network dependency.' },
 ];
 
-const STATUS_UI = {
-  online:         { label: 'Online',         color: 'var(--accent-green)',  dot: 'online' },
-  configured:     { label: 'Key configured', color: 'var(--accent-green)',  dot: 'online' },
-  degraded:       { label: 'Degraded',       color: 'var(--accent-orange)', dot: 'degraded' },
-  offline:        { label: 'Offline',        color: 'var(--accent-red)',    dot: 'offline' },
-  not_configured: { label: 'No API key (using model fallback)', color: 'var(--accent-orange)', dot: 'degraded' },
-  unknown:        { label: 'Checking…',      color: 'var(--text-tertiary)', dot: 'degraded' },
+const STATUS = {
+  online: { label: 'Online', tone: 'green', dot: 'var(--green)' },
+  configured: { label: 'Configured', tone: 'blue', dot: 'var(--blue)' },
+  degraded: { label: 'Degraded', tone: 'orange', dot: 'var(--orange)' },
+  offline: { label: 'Offline', tone: 'red', dot: 'var(--red)' },
+  not_configured: { label: 'Not configured', tone: '', dot: 'var(--label-3)' },
+};
+const HEALTHY = new Set(['online', 'configured']);
+
+const COVERAGE = [
+  { s: 'real', t: 'Rainfall, weather and forecasts', d: 'Live Open-Meteo (ECMWF/GFS) data.' },
+  { s: 'real', t: 'River discharge', d: 'GloFAS model output via Open-Meteo Flood.' },
+  { s: 'real', t: 'Tide predictions', d: 'StormGlass tidal data for coastal points when the key is active.' },
+  { s: 'real', t: 'DIGIPIN addressing', d: 'Computed locally per the India Post specification.' },
+  { s: 'sim', t: 'Satellite altimetry', d: 'Derived from the Open-Meteo marine model, not a direct satellite altimeter feed.' },
+  { s: 'sim', t: 'Absolute depth values', d: 'Physics-based estimates on a bathymetry model, not sensor readings.' },
+  { s: 'none', t: 'INCOIS ocean services', d: 'Not integrated.' },
+  { s: 'none', t: 'IMD observations', d: 'Not integrated. Weather comes from global models instead.' },
+  { s: 'none', t: 'India-WRIS gauge data', d: 'Not integrated. No in-situ river or reservoir gauges.' },
+];
+const COV = {
+  real: { label: 'Real data', tone: 'green', icon: CheckCircle2, color: 'var(--green)' },
+  sim: { label: 'Derived / modelled', tone: 'orange', icon: Info, color: 'var(--orange)' },
+  none: { label: 'Not integrated', tone: '', icon: CircleDashed, color: 'var(--label-3)' },
 };
 
+const PIPE = ['Data sources', 'DIGIPIN grid', 'Fusion model', 'Depth + risk', 'Forecast & alerts'];
+
+function SourceRow({ src, info, open, onToggle }) {
+  const st = STATUS[info?.status] || STATUS.not_configured;
+  const Icon = src.icon;
+  return (
+    <div className="ds-item" data-source={src.key}>
+      <div className="list-row tappable ds-row" role="button" tabIndex={0} aria-expanded={open} onClick={onToggle}
+        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onToggle())}>
+        <span className="icon-chip" style={{ background: src.color }}><Icon /></span>
+        <div className="list-main">
+          <div className="list-title">{src.name}</div>
+          <div className="list-detail">{src.role}</div>
+        </div>
+        <span className="ds-status">
+          <i className="ds-dot" style={{ background: st.dot }} />
+          <span>{st.label}</span>
+          {info?.latency_ms != null && <span className="tnum ds-lat">{fmtNum(info.latency_ms)} ms</span>}
+        </span>
+        <ChevronDown className={`chev ds-chev ${open ? 'open' : ''}`} />
+      </div>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div className="ds-more" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}>
+            <div className="ds-more-inner">
+              <p>{src.desc}</p>
+              <dl>
+                <div><dt>Status</dt><dd><Badge tone={st.tone}>{st.label}</Badge></dd></div>
+                <div><dt>Latency</dt><dd className="tnum">{info?.latency_ms != null ? `${fmtNum(info.latency_ms)} ms` : 'n/a'}</dd></div>
+                {info?.detail && <div><dt>Note</dt><dd>{info.detail}</dd></div>}
+              </dl>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export default function DataSources() {
-  const [selectedSource, setSelectedSource] = useState(null);
-  const [status, setStatus] = useState(null);
+  const [state, setState] = useState({ s: 'loading' });
+  const [open, setOpen] = useState(null);
 
-  useEffect(() => {
-    getSystemStatus().then(setStatus).catch(() => setStatus({ sources: [], failed: true }));
-  }, []);
+  const load = () => {
+    setState({ s: 'loading' });
+    getSystemStatus().then((d) => setState({ s: 'ok', d })).catch(() => setState({ s: 'error' }));
+  };
+  useEffect(load, []);
 
-  const statusOf = (key) => status?.sources?.find((x) => x.key === key);
+  const d = state.d;
+  const byKey = Object.fromEntries((d?.sources || []).map((x) => [x.key, x]));
+  const healthy = SOURCES.filter((s) => HEALTHY.has(byKey[s.key]?.status)).length;
+  const ld = state.s === 'loading';
+  const stag = (i) => ({ ...fadeUp, transition: { ...fadeUp.transition, delay: Math.min(i, 8) * 0.04 } });
 
   return (
-    <div className="page">
-      <motion.div className="page-header" {...fadeUp}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--accent-blue-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Database size={20} style={{ color: 'var(--accent-teal)' }} />
-          </div>
-          <div>
-            <h1 className="page-title">Data Sources</h1>
-            <p className="page-subtitle">Live data pipelines powering depth predictions across Indian water bodies</p>
-          </div>
-        </div>
-      </motion.div>
+    <div className="page ds">
+      <PageHeader title="Data Sources" subtitle="Where every number comes from, how healthy each feed is, and what is modelled rather than measured." />
 
-      {/* System overview */}
-      <motion.div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }} {...fadeUp} transition={{ delay: 0.1 }}>
-        {[
-          { label: 'Sources Healthy', value: status ? (status.failed ? '—' : `${status.online}/${status.total}`) : '…', icon: <Database size={16} />, color: 'var(--accent-blue)', bg: 'var(--accent-blue-dim)' },
-          { label: 'Avg Upstream Latency', value: status?.avg_latency_ms != null ? `${status.avg_latency_ms}ms` : '—', icon: <Activity size={16} />, color: 'var(--accent-green)', bg: 'var(--accent-green-dim)' },
-          { label: 'Locations Indexed', value: status?.locations_indexed ? status.locations_indexed.toLocaleString() : '—', icon: <Zap size={16} />, color: 'var(--accent-orange)', bg: 'var(--accent-orange-dim)' },
-          { label: 'Model', value: 'Physics fusion', icon: <HardDrive size={16} />, color: 'var(--accent-purple)', bg: 'var(--accent-purple-dim)' },
-        ].map(({ label, value, icon, color, bg }, i) => (
-          <motion.div key={label} className="glass-card stat-card" {...fadeUp} transition={{ delay: 0.12 + i * 0.04 }}>
-            <div className="stat-card-header">
-              <span className="stat-card-label">{label}</span>
-              <div className="stat-card-icon" style={{ background: bg, color }}>{icon}</div>
-            </div>
-            <div className="stat-card-value">{value}</div>
-          </motion.div>
-        ))}
-      </motion.div>
+      <div className="grid c3 ds-stats">
+        <motion.div {...stag(0)}><Stat loading={ld} label="Sources healthy" icon={Activity} color="var(--green)" value={state.s === 'error' ? '—' : `${healthy}/${SOURCES.length}`} foot={state.s === 'error' ? 'Status unavailable' : healthy === SOURCES.length ? 'Everything is running' : 'Some sources need attention'} /></motion.div>
+        <motion.div {...stag(1)}><Stat loading={ld} label="Average latency" icon={Timer} color="var(--orange)" value={d?.avg_latency_ms != null ? fmtNum(d.avg_latency_ms) : '—'} unit={d?.avg_latency_ms != null ? 'ms' : ''} foot="Across live API sources" /></motion.div>
+        <motion.div {...stag(2)}><Stat loading={ld} label="Locations indexed" icon={Database} color="var(--blue)" value={d?.locations_indexed != null ? fmtNum(d.locations_indexed) : '—'} foot="Each with a DIGIPIN address" /></motion.div>
+      </div>
 
-      {/* Architecture Pipeline */}
-      <motion.div className="glass-card glass-card--no-hover" style={{ marginBottom: 'var(--space-6)' }} {...fadeUp} transition={{ delay: 0.2 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
-          <Cpu size={16} style={{ color: 'var(--accent-indigo)' }} />
-          <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>Data Fusion Pipeline</span>
-        </div>
+      <h2 className="section-title">Live sources</h2>
+      {state.s === 'error' ? (
+        <Card><EmptyState icon={WifiOff} title="Couldn’t load source status" action={<button className="btn" onClick={load}>Try again</button>}>The status service didn’t respond.</EmptyState></Card>
+      ) : ld ? (
+        <List>{SOURCES.map((s) => (
+          <div key={s.key} className="list-row" style={{ minHeight: 60 }}>
+            <div className="skeleton" style={{ width: 30, height: 30, borderRadius: 8 }} />
+            <div className="list-main"><div className="skeleton" style={{ height: 13, width: '45%', marginBottom: 7 }} /><div className="skeleton" style={{ height: 11, width: '65%' }} /></div>
+          </div>))}
+        </List>
+      ) : (
+        <motion.div {...stag(3)}>
+          <List>{SOURCES.map((s) => <SourceRow key={s.key} src={s} info={byKey[s.key]} open={open === s.key} onToggle={() => setOpen((o) => (o === s.key ? null : s.key))} />)}</List>
+        </motion.div>
+      )}
 
-        <div className="equation-display" style={{ marginBottom: '20px' }}>
-          <span className="var-highlight">Depth</span> = Base_Depth + <span className="var-highlight">α</span>·Rainfall + <span className="var-highlight">β</span>·Tide + <span className="var-highlight">γ</span>·Discharge − <span className="var-highlight">δ</span>·Evaporation
-        </div>
-
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          gap: '12px', flexWrap: 'wrap', padding: '16px 0',
-        }}>
-          {['DIGIPIN Grid', 'Weather API', 'Tide API', 'Bathymetry API'].map((src, i) => (
-            <React.Fragment key={src}>
-              <div style={{
-                padding: '10px 18px', borderRadius: 'var(--radius-md)',
-                background: 'rgba(10,132,255,0.06)', border: '1px solid rgba(10,132,255,0.1)',
-                fontSize: '12px', fontWeight: 600, color: 'var(--accent-teal)',
-              }}>
-                {src}
-              </div>
-              {i < 3 && (
-                <div style={{ color: 'var(--text-quaternary)', fontSize: '18px' }}>→</div>
-              )}
-            </React.Fragment>
+      <h2 className="section-title">Data fusion</h2>
+      <Card>
+        <div className="card-title">Depth model</div>
+        <div className="card-sub">Each factor is fetched per location and combined into one depth estimate.</div>
+        <div className="equation">Depth = Base + α·Rainfall + β·Tide + γ·Discharge − δ·Evaporation</div>
+        <ol className="ds-pipe" aria-label="Processing pipeline">
+          {PIPE.map((p, i) => (
+            <li key={p}>
+              <span className="ds-step"><b className="tnum">{i + 1}</b>{p}</span>
+              {i < PIPE.length - 1 && <ArrowRight className="ds-arrow" size={16} />}
+            </li>
           ))}
-          <div style={{ color: 'var(--text-quaternary)', fontSize: '18px' }}>→</div>
-          <div style={{
-            padding: '10px 18px', borderRadius: 'var(--radius-md)',
-            background: 'rgba(48,209,88,0.08)', border: '1px solid rgba(48,209,88,0.15)',
-            fontSize: '12px', fontWeight: 700, color: 'var(--accent-green)',
-          }}>
-            ⚡ Physics Engine
-          </div>
-          <div style={{ color: 'var(--text-quaternary)', fontSize: '18px' }}>→</div>
-          <div style={{
-            padding: '10px 18px', borderRadius: 'var(--radius-md)',
-            background: 'var(--gradient-ocean)', fontSize: '12px', fontWeight: 700, color: '#fff',
-          }}>
-            Depth Forecast
-          </div>
-        </div>
-      </motion.div>
+        </ol>
+      </Card>
 
-      {/* Source cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(380px, 100%), 1fr))', gap: 'var(--space-4)' }}>
-        {DATA_SOURCES.map((source, i) => {
-          const Icon = source.icon;
+      <h2 className="section-title">Data coverage vs project brief</h2>
+      <List>
+        {COVERAGE.map((c) => {
+          const m = COV[c.s]; const I = m.icon;
           return (
-            <motion.div
-              key={source.name}
-              className="glass-card data-source-card"
-              style={{ flexDirection: 'column', cursor: 'pointer' }}
-              {...fadeUp}
-              transition={{ delay: 0.25 + i * 0.06 }}
-              onClick={() => setSelectedSource(selectedSource === i ? null : i)}
-            >
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px', width: '100%' }}>
-                <div className="data-source-icon" style={{ background: source.bg, color: source.color }}>
-                  <Icon size={20} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
-                    <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 700 }}>{source.name}</h3>
-                    {(() => {
-                      const st = statusOf(source.key);
-                      const ui = STATUS_UI[st?.status || (status ? 'offline' : 'unknown')];
-                      return (
-                        <div className="data-source-status" title={st?.detail || ''}>
-                          <span className={`status-dot ${ui.dot}`} />
-                          <span style={{ color: ui.color }}>{ui.label}{st?.latency_ms != null ? ` · ${st.latency_ms}ms` : ''}</span>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                  <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '10px' }}>
-                    {source.description}
-                  </p>
-                  <div style={{ display: 'flex', gap: '12px', fontSize: '10px' }}>
-                    <span style={{ color: 'var(--text-tertiary)' }}>
-                      <Clock size={10} style={{ verticalAlign: 'middle', marginRight: '3px' }} />
-                      {source.update}
-                    </span>
-                    <span style={{ color: 'var(--text-tertiary)' }}>
-                      <Radio size={10} style={{ verticalAlign: 'middle', marginRight: '3px' }} />
-                      {source.resolution}
-                    </span>
-                    <span className={`chip`} style={{ fontSize: '9px', padding: '1px 8px' }}>
-                      {source.type}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Expanded features */}
-              {selectedSource === i && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.04)', width: '100%' }}
-                >
-                  <div style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '10px' }}>
-                    Available Features
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                    {source.features.map((f) => (
-                      <div key={f} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                        <CheckCircle2 size={12} style={{ color: source.color, flexShrink: 0 }} />
-                        {f}
-                      </div>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-            </motion.div>
+            <div key={c.t} className="list-row ds-cov" data-coverage={c.s}>
+              <span className="icon-chip" style={{ background: m.color }}><I /></span>
+              <div className="list-main"><div className="list-title ds-wrap">{c.t}</div><div className="list-detail">{c.d}</div></div>
+              <Badge tone={m.tone}>{m.label}</Badge>
+            </div>
           );
         })}
-      </div>
+      </List>
+      <p className="ds-foot">Absolute depth figures are modelled estimates. Treat them as indicative, not as survey measurements.</p>
     </div>
   );
 }

@@ -1,574 +1,409 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, animate } from 'framer-motion';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { Search, X, Thermometer, CloudRain, Wind, Droplets, Waves, ChevronRight } from 'lucide-react';
+import { Badge, spring } from '../components/ui';
+import { TYPE_COLOR, TYPE_BADGE, fmtCompact, fmtM } from '../lib/format';
 import {
-  Search, Droplets, Waves, CloudRain, ChevronRight,
-  MapPin, Thermometer, Wind, Gauge, X, Navigation,
-  Anchor, Fish, Mountain,
-} from 'lucide-react';
-import useAppStore from '../stores/appStore';
-import {
-  getLocationsGeoJSON, getLocationStats,
-  searchLocations, getCurrentDepth, getWeather, getTide,
-  encodeDIGIPIN,
+  getLocationsGeoJSON, getLocationStats, searchLocations,
+  getCurrentDepth, getWeather, getTide, encodeDIGIPIN,
 } from '../services/api';
+import {
+  BASE_STYLE, addDataLayers, applyBasemap, applyDataTheme, applyFilter,
+  CLICK_LAYERS, rampCss, IOS_EASE,
+} from '../lib/mapStyle';
+import './Dashboard.css';
 
-const INDIA = [79.0, 22.0];
-const STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+const INDIA = [79.0, 22.4];
+const BOUNDS = [[38, -12], [130, 48]]; // = wide bathymetry extent (free zoom-out, no visible image edge)
+const LAYERS = [
+  { key: 'all', label: 'All', color: null },
+  { key: 'ocean', label: 'Ocean', color: 'var(--blue)' },
+  { key: 'river', label: 'Rivers', color: 'var(--teal)' },
+  { key: 'lake', label: 'Lakes', color: 'var(--green)' },
+  { key: 'reservoir', label: 'Reservoirs', color: 'var(--purple)' },
+];
 
-const TYPE_COLORS = {
-  ocean: '#0A84FF',
-  river: '#64D2FF',
-  lake: '#30D158',
-  reservoir: '#BF5AF2',
-};
+async function fetchRivers() {
+  const r = await fetch('/api/v1/map/rivers');
+  if (!r.ok) throw new Error('rivers');
+  return r.json();
+}
 
-export default function Dashboard() {
+function CountUp({ value, digits = 1 }) {
+  const [v, setV] = useState(value);
+  const prev = useRef(0);
+  useEffect(() => {
+    const c = animate(prev.current, value, {
+      duration: 0.9, ease: [0.32, 0.72, 0, 1],
+      onUpdate: (x) => { prev.current = x; setV(x); },
+    });
+    return () => c.stop();
+  }, [value]);
+  return <>{Number(v).toFixed(digits)}</>;
+}
+
+function Cell({ label, value }) {
+  return <div className="mp-cell"><span>{label}</span><b>{value}</b></div>;
+}
+
+function Panel({ loc, state, data, onClose, onRetry, onOpen }) {
+  const { depth, weather, tide } = data || {};
+  const signed = (n, d = 2) => (n == null ? '—' : `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(d)} m`);
+  return (
+    <motion.aside
+      className="map-panel material"
+      role="dialog" aria-label={`Details for ${loc.name}`}
+      initial={{ opacity: 0, x: 24, scale: 0.98 }} animate={{ opacity: 1, x: 0, scale: 1 }}
+      exit={{ opacity: 0, x: 24, scale: 0.98 }} transition={spring}
+    >
+      <div className="mp-head">
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="mp-title">{loc.name}</div>
+          <div className="mp-sub">{[loc.region, loc.type].filter(Boolean).join(' · ')}</div>
+        </div>
+        <button className="mp-close" aria-label="Close details" onClick={onClose}><X /></button>
+      </div>
+      <div className="mp-meta">
+        <Badge tone={TYPE_BADGE[loc.type]}>{loc.type}</Badge>
+        {loc.digipin && <span className="mono">{loc.digipin}</span>}
+        <span>{loc.lat.toFixed(3)}°N, {loc.lon.toFixed(3)}°E</span>
+      </div>
+
+      {state === 'error' ? (
+        <div className="mp-err" role="alert">
+          <p>Couldn’t load live conditions for this spot right now.</p>
+          <button className="btn tinted" onClick={onRetry}>Retry</button>
+        </div>
+      ) : state === 'loading' ? (
+        <>
+          <div className="mp-hero"><div className="lbl">Current depth</div><div className="skeleton" style={{ height: 52, width: 170, marginTop: 8, borderRadius: 12 }} /></div>
+          <div className="mp-grid">{[0, 1, 2, 3].map((i) => <div key={i} className="skeleton" style={{ height: 52, borderRadius: 12 }} />)}</div>
+          <div className="mp-inset">{[0, 1, 2, 3].map((i) => <div key={i} className="mp-row"><div className="skeleton" style={{ height: 14, width: '100%' }} /></div>)}</div>
+          <div className="mp-note">Fetching live depth model… this can take a few seconds.</div>
+        </>
+      ) : (
+        <>
+          {depth && (
+            <>
+              <div className="mp-hero">
+                <div className="lbl">Current depth</div>
+                <div className="num"><CountUp value={depth.computed_depth} /><small>m</small></div>
+              </div>
+              <div className="mp-grid">
+                <Cell label="Base depth" value={fmtM(depth.base_depth)} />
+                <Cell label="Tide" value={signed(depth.tidal_offset)} />
+                <Cell label="Rainfall" value={signed(depth.rainfall_impact)} />
+                <Cell label="Confidence" value={`${Math.round((depth.confidence ?? 0) * 100)}%`} />
+              </div>
+            </>
+          )}
+          {weather && (
+            <div className="mp-inset">
+              <div className="mp-row"><Thermometer />Temperature<em>{weather.temperature_c?.toFixed(1)}°C</em></div>
+              <div className="mp-row"><CloudRain />Rainfall<em>{weather.precipitation_mm?.toFixed(1)} mm</em></div>
+              <div className="mp-row"><Wind />Wind<em>{weather.wind_speed_ms?.toFixed(1)} m/s</em></div>
+              <div className="mp-row"><Droplets />Humidity<em>{weather.humidity_pct?.toFixed(0)}%</em></div>
+              {tide && loc.type === 'ocean' && (
+                <div className="mp-row"><Waves />Tide · {tide.tide_phase}<em>{tide.sea_level_m?.toFixed(2)} m · waves {tide.wave_height_m?.toFixed(1)} m</em></div>
+              )}
+            </div>
+          )}
+          {!depth && !weather && <div className="mp-note">No live data available.</div>}
+        </>
+      )}
+      <button className="btn block" onClick={onOpen} disabled={!loc.digipin}>
+        View full analysis <ChevronRight size={18} />
+      </button>
+    </motion.aside>
+  );
+}
+
+export default function Dashboard({ scheme = 'light' }) {
   const navigate = useNavigate();
-  const mapContainer = useRef(null);
+  const containerRef = useRef(null);
   const mapRef = useRef(null);
-  const popupRef = useRef(null);
-  const layersAdded = useRef(false);
+  const markerRef = useRef(null);
+  const reqRef = useRef(0);
+  const schemeRef = useRef(scheme);
+  schemeRef.current = scheme;
+  const filterRef = useRef('all');
 
-  const {
-    selectedLocation, setSelectedLocation,
-    searchQuery, setSearchQuery, searchResults, setSearchResults,
-  } = useAppStore();
+  const [mapReady, setMapReady] = useState(false);
+  const [points, setPoints] = useState(null);
+  const [rivers, setRivers] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const [stats, setStats] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [state, setState] = useState('idle');
+  const [data, setData] = useState(null);
 
-  const [isLoading, setIsLoading] = useState(true);
-  const [selectedData, setSelectedData] = useState(null);
-  const [isLoadingData, setIsLoadingData] = useState(false);
-  const [showSearch, setShowSearch] = useState(false);
-  const [activeFilter, setActiveFilter] = useState('all');
-  const [stats, setStats] = useState({ total: 0, ocean: 0, river: 0, lake: 0, reservoir: 0 });
-  const [geojsonData, setGeojsonData] = useState(null);
-  const [loadFailed, setLoadFailed] = useState(false);
+  // ── data ──
+  const load = useCallback(async () => {
+    setLoading(true); setFailed(false);
+    const [g, r, s] = await Promise.allSettled([getLocationsGeoJSON(), fetchRivers(), getLocationStats()]);
+    if (g.status === 'fulfilled') {
+      setPoints(g.value);
+      if (r.status === 'fulfilled') setRivers(r.value);
+      if (s.status === 'fulfilled') setStats(s.value);
+    } else setFailed(true);
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
 
-  // ── Load GeoJSON + stats ──
-  useEffect(() => {
-    (async () => {
-      setIsLoading(true);
-      try {
-        const [geoRes, statsRes] = await Promise.allSettled([
-          getLocationsGeoJSON(),
-          getLocationStats(),
-        ]);
-
-        if (geoRes.status === 'fulfilled') {
-          setGeojsonData(geoRes.value);
-        } else {
-          setLoadFailed(true);
-        }
-
-        if (statsRes.status === 'fulfilled') {
-          const s = statsRes.value;
-          setStats({
-            total: s.total || s.total_locations || 0,
-            ocean: s.by_type?.ocean || 0,
-            river: s.by_type?.river || 0,
-            lake: s.by_type?.lake || 0,
-            reservoir: s.by_type?.reservoir || 0,
-          });
-        }
-      } catch (err) {
-        console.error('Failed to load map data:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    })();
+  // ── fetch details for selected ──
+  const fetchDetails = useCallback(async (loc) => {
+    const id = ++reqRef.current;
+    setState('loading'); setData(null);
+    const p = { digipin: loc.digipin };
+    const [depth, weather, tide] = await Promise.allSettled([getCurrentDepth(p), getWeather(p), getTide(p)]);
+    if (id !== reqRef.current) return;
+    const d = {
+      depth: depth.status === 'fulfilled' ? depth.value : null,
+      weather: weather.status === 'fulfilled' ? weather.value : null,
+      tide: tide.status === 'fulfilled' ? tide.value : null,
+    };
+    setData(d);
+    setState(d.depth || d.weather ? 'ready' : 'error');
   }, []);
 
-  // ── Init map ──
-  useEffect(() => {
-    if (!mapContainer.current || mapRef.current) return;
+  const select = useCallback(async (raw) => {
+    const map = mapRef.current;
+    let loc = { ...raw };
+    setSelected(loc); setResults(null); setQuery('');
+    setState('loading'); setData(null);
+    const wide = window.innerWidth > 760;
+    if (map) {
+      map.easeTo({
+        center: [loc.lon, loc.lat],
+        zoom: Math.max(map.getZoom(), loc.type === 'ocean' ? 7 : 9),
+        padding: wide ? { right: 380, top: 0, left: 0, bottom: 0 } : { bottom: 300, top: 0, left: 0, right: 0 },
+        duration: 1400, easing: IOS_EASE, essential: true,
+      });
+    }
+    if (!loc.digipin) {
+      try {
+        const e = await encodeDIGIPIN(loc.lat, loc.lon);
+        loc = { ...loc, digipin: e.digipin };
+        setSelected(loc);
+      } catch { setState('error'); return; }
+    }
+    fetchDetails(loc);
+  }, [fetchDetails]);
 
+  const close = useCallback(() => {
+    reqRef.current++;
+    setSelected(null); setState('idle'); setData(null);
+    mapRef.current?.easeTo({ padding: { top: 0, right: 0, bottom: 0, left: 0 }, duration: 600, easing: IOS_EASE });
+  }, []);
+
+  // ── map init ──
+  const selectRef = useRef(select);
+  selectRef.current = select;
+  useEffect(() => {
     const map = new maplibregl.Map({
-      container: mapContainer.current,
-      style: STYLE,
-      center: INDIA,
-      zoom: 4.8,
-      attributionControl: false,
-      maxBounds: [[55, -5], [105, 42]],
+      container: containerRef.current, style: BASE_STYLE,
+      center: INDIA, zoom: 4.6, minZoom: 3, maxZoom: 16,
+      maxBounds: BOUNDS, attributionControl: false, fadeDuration: 150,
+      dragRotate: false, pitchWithRotate: false,
     });
-
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
     mapRef.current = map;
+    map.touchZoomRotate.disableRotation();
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
-    // Click handler for circle layers
-    const handleLayerClick = async (e) => {
-      if (!e.features?.length) return;
-      const f = e.features[0];
-      const coords = f.geometry.coordinates;
-      const props = f.properties;
-
-      // Compute DIGIPIN on click (not stored in GeoJSON for speed)
-      let digipin = '';
-      try {
-        const res = await encodeDIGIPIN(coords[1], coords[0]);
-        digipin = res.digipin || '';
-      } catch { /* fallback */ }
-
-      const loc = {
-        name: props.n,
-        region: props.r,
-        water_body_type: props.t,
-        digipin,
-        latitude: coords[1],
-        longitude: coords[0],
-      };
-
-      handleMarkerClick(loc);
-    };
-
-    // Wait for style to load before adding layers
     map.on('load', () => {
-      // We add layers in the geojson effect below
+      applyBasemap(map, schemeRef.current);
+      setMapReady(true);
     });
 
-    // Layer interaction handlers
-    ['ocean-layer', 'river-layer', 'lake-layer', 'reservoir-layer'].forEach((layer) => {
-      map.on('click', layer, handleLayerClick);
-      map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
+    const el = document.createElement('div');
+    el.className = 'sel-marker'; el.innerHTML = '<i></i>';
+    markerRef.current = new maplibregl.Marker({ element: el });
+
+    map.on('click', (e) => {
+      const feats = map.queryRenderedFeatures(
+        [[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]],
+        { layers: [...CLICK_LAYERS, 'wb-rivers'].filter((l) => map.getLayer(l)) },
+      );
+      if (!feats.length) return;
+      const f = feats.find((x) => x.layer.id !== 'wb-bathy-dots') || feats[0];
+      const p = f.properties;
+      if (f.layer.id === 'wb-rivers') {
+        selectRef.current({ name: p.name || 'River', region: 'River', type: 'river', lat: e.lngLat.lat, lon: e.lngLat.lng });
+      } else {
+        const [lon, lat] = f.geometry.coordinates;
+        selectRef.current({ name: p.n, region: p.r, type: p.t, lat, lon, base: p.d });
+      }
+    });
+    const hover = (on) => () => { map.getCanvas().style.cursor = on ? 'pointer' : ''; };
+    ['wb-bathy-dots', 'wb-lakes', 'wb-reservoirs', 'wb-rivers'].forEach((l) => {
+      map.on('mouseenter', l, hover(true)); map.on('mouseleave', l, hover(false));
     });
 
-    return () => {
-      map.remove();
-      mapRef.current = null;
-    };
+    return () => { markerRef.current?.remove(); map.remove(); mapRef.current = null; };
   }, []);
 
-  // ── Add GeoJSON data to map when available ──
+  // data layers
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !geojsonData || layersAdded.current) return;
+    if (!mapReady || !map || !points) return;
+    addDataLayers(map, scheme, points, rivers);
+    applyDataTheme(map, scheme);
+    applyFilter(map, filterRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, points, rivers]);
 
-    const addLayers = () => {
-      if (layersAdded.current) return;
-
-      // Add source with ALL locations
-      map.addSource('locations', {
-        type: 'geojson',
-        data: geojsonData,
-      });
-
-      // Ocean layer — very subtle, avoid solid fill look
-      map.addLayer({
-        id: 'ocean-layer',
-        type: 'circle',
-        source: 'locations',
-        filter: ['==', ['get', 't'], 'ocean'],
-        paint: {
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 0.8, 6, 1.8, 10, 4.5],
-          'circle-color': '#0A84FF',
-          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0.35, 6, 0.5, 10, 0.75],
-          'circle-stroke-width': 0,
-          'circle-stroke-color': 'transparent',
-        },
-      });
-
-      // River layer — visible flowing lines through India
-      map.addLayer({
-        id: 'river-layer',
-        type: 'circle',
-        source: 'locations',
-        filter: ['==', ['get', 't'], 'river'],
-        paint: {
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 0.8, 6, 1.8, 10, 4],
-          'circle-color': '#64D2FF',
-          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0.6, 6, 0.75, 10, 0.9],
-          'circle-stroke-width': 0,
-          'circle-stroke-color': 'transparent',
-        },
-      });
-
-      // Lake layer — prominent green dots
-      map.addLayer({
-        id: 'lake-layer',
-        type: 'circle',
-        source: 'locations',
-        filter: ['==', ['get', 't'], 'lake'],
-        paint: {
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 3, 6, 5, 10, 9],
-          'circle-color': '#30D158',
-          'circle-opacity': 0.85,
-          'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 3, 0, 6, 0.5, 10, 1],
-          'circle-stroke-color': 'rgba(48, 209, 88, 0.3)',
-        },
-      });
-
-      // Reservoir layer — prominent purple dots
-      map.addLayer({
-        id: 'reservoir-layer',
-        type: 'circle',
-        source: 'locations',
-        filter: ['==', ['get', 't'], 'reservoir'],
-        paint: {
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 3, 6, 5, 10, 9],
-          'circle-color': '#BF5AF2',
-          'circle-opacity': 0.85,
-          'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 3, 0, 6, 0.5, 10, 1],
-          'circle-stroke-color': 'rgba(191, 90, 242, 0.3)',
-        },
-      });
-
-      layersAdded.current = true;
-    };
-
-    if (map.isStyleLoaded()) {
-      addLayers();
-    } else {
-      map.once('load', addLayers);
-    }
-  }, [geojsonData]);
-
-  // ── Toggle layer visibility based on filter ──
+  // theme
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !layersAdded.current) return;
+    if (!mapReady || !map) return;
+    applyBasemap(map, scheme);
+    applyDataTheme(map, scheme);
+  }, [mapReady, scheme]);
 
-    const layers = ['ocean-layer', 'river-layer', 'lake-layer', 'reservoir-layer'];
-    const typeMap = { ocean: 'ocean-layer', river: 'river-layer', lake: 'lake-layer', reservoir: 'reservoir-layer' };
+  // filter
+  useEffect(() => {
+    filterRef.current = filter;
+    const map = mapRef.current;
+    if (mapReady && map) applyFilter(map, filter);
+  }, [mapReady, filter]);
 
-    layers.forEach((layer) => {
+  // marker
+  useEffect(() => {
+    const m = markerRef.current, map = mapRef.current;
+    if (!m || !map) return;
+    if (selected) m.setLngLat([selected.lon, selected.lat]).addTo(map); else m.remove();
+  }, [selected?.lat, selected?.lon, !!selected, mapReady]); // eslint-disable-line
+
+  // ESC
+  useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape') { if (query || results) { setQuery(''); setResults(null); } else if (selected) close(); } };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [query, results, selected, close]);
+
+  // search (debounced)
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) { setResults(null); return undefined; }
+    let live = true;
+    const t = setTimeout(async () => {
       try {
-        if (activeFilter === 'all') {
-          map.setLayoutProperty(layer, 'visibility', 'visible');
-        } else {
-          map.setLayoutProperty(layer, 'visibility', typeMap[activeFilter] === layer ? 'visible' : 'none');
-        }
-      } catch (e) { /* layer not yet added */ }
-    });
-  }, [activeFilter]);
+        const r = await searchLocations(q);
+        if (!live) return;
+        const seen = new Set();
+        const uniq = (r.locations || []).filter((l) => {
+          const k = `${l.name}|${l.region}|${l.water_body_type}`;
+          if (seen.has(k)) return false;
+          seen.add(k); return true;
+        });
+        setResults(uniq.slice(0, 8));
+      } catch { if (live) setResults([]); }
+    }, 250);
+    return () => { live = false; clearTimeout(t); };
+  }, [query]);
 
-  // ── Handle marker/feature click ──
-  const handleMarkerClick = useCallback(async (loc) => {
-    setSelectedLocation(loc);
-    setIsLoadingData(true);
-    setSelectedData(null);
+  const pick = (r) => select({
+    name: r.name, region: r.region, type: r.water_body_type,
+    lat: r.latitude, lon: r.longitude, digipin: r.digipin,
+  });
 
-    mapRef.current?.flyTo({
-      center: [loc.longitude, loc.latitude],
-      zoom: 8,
-      duration: 1200,
-      essential: true,
-    });
-
-    try {
-      const [depth, weather, tide] = await Promise.allSettled([
-        getCurrentDepth({ digipin: loc.digipin }),
-        getWeather({ digipin: loc.digipin }),
-        getTide({ digipin: loc.digipin }),
-      ]);
-
-      setSelectedData({
-        depth: depth.status === 'fulfilled' ? depth.value : null,
-        weather: weather.status === 'fulfilled' ? weather.value : null,
-        tide: tide.status === 'fulfilled' ? tide.value : null,
-      });
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsLoadingData(false);
-    }
-  }, []);
-
-  // ── Search ──
-  const handleSearch = useCallback(async (q) => {
-    setSearchQuery(q);
-    if (q.length < 2) { setSearchResults([]); return; }
-    try {
-      const data = await searchLocations(q);
-      setSearchResults(data.locations || []);
-    } catch { setSearchResults([]); }
-  }, []);
+  const by = stats?.by_type || {};
+  const statItems = stats ? [
+    ['Total', stats.total ?? stats.total_locations], ['Ocean', by.ocean], ['Rivers', by.river],
+    ['Lakes', by.lake], ['Reservoirs', by.reservoir],
+  ] : [];
 
   return (
-    <div className="dashboard-layout">
-      {/* Map */}
-      <div className="map-container" ref={mapContainer} />
+    <div className="map-wrap">
+      <div ref={containerRef} className="map-canvas" data-testid="map-canvas" />
 
-      {/* Top — Spotlight command bar */}
-      <div className="map-overlay-top">
-        <motion.div
-          className="command-bar"
-          initial={{ opacity: 0, y: -15 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3, duration: 0.5 }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <Search size={15} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+      <div className="map-top">
+        <div className="map-search material">
+          <label className="search">
+            <Search />
             <input
-              type="text"
-              placeholder="Search DIGIPIN locations, rivers, lakes..."
-              value={searchQuery}
-              onChange={(e) => handleSearch(e.target.value)}
-              onFocus={() => setShowSearch(true)}
-              style={{
-                flex: 1, border: 'none', outline: 'none', background: 'transparent',
-                color: 'var(--text-primary)', fontFamily: 'var(--font-family)',
-                fontSize: 'var(--text-sm)', fontWeight: 400,
-              }}
+              value={query} onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search places, rivers, lakes…" aria-label="Search water bodies"
+              onKeyDown={(e) => { if (e.key === 'Enter' && results?.[0]) pick(results[0]); }}
             />
-            {searchQuery && (
-              <X size={14} style={{ cursor: 'pointer', color: 'var(--text-tertiary)' }}
-                onClick={() => { setSearchQuery(''); setSearchResults([]); setShowSearch(false); }}
-              />
-            )}
-          </div>
-
-          <AnimatePresence>
-            {showSearch && searchResults.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                style={{ overflow: 'hidden', marginTop: '8px', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '8px' }}
-              >
-                {searchResults.slice(0, 6).map((loc, i) => (
-                  <div
-                    key={loc.digipin || i}
-                    className="location-card"
-                    onClick={() => { handleMarkerClick(loc); setShowSearch(false); }}
-                  >
-                    <MapPin size={13} style={{ color: TYPE_COLORS[loc.water_body_type], flexShrink: 0 }} />
-                    <div className="location-card-info">
-                      <div className="location-card-name">{loc.name}</div>
-                      <div className="location-card-region">{loc.region} · {loc.water_body_type}</div>
-                    </div>
-                    <ChevronRight size={12} style={{ color: 'var(--text-quaternary)' }} />
-                  </div>
+            {query && <button className="clear" aria-label="Clear search" onClick={(e) => { e.preventDefault(); setQuery(''); setResults(null); }}><X /></button>}
+          </label>
+          <AnimatePresence initial={false}>
+            {results && (
+              <motion.div className="map-results" role="listbox" aria-label="Search results"
+                initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+                transition={spring} style={{ overflow: 'hidden auto' }}>
+                {results.length === 0 && <div className="map-empty">No matches</div>}
+                {results.map((r) => (
+                  <button key={r.digipin + r.name} className="map-result" role="option" onClick={() => pick(r)}>
+                    <span className="dot" style={{ background: TYPE_COLOR[r.water_body_type] }} />
+                    <span className="mr-main">
+                      <div className="mr-name">{r.name}</div>
+                      <div className="mr-sub">{[r.region, r.water_body_type].filter(Boolean).join(' · ')}</div>
+                    </span>
+                    {r.distance_km != null && <span className="mr-dist">{Math.round(r.distance_km)} km</span>}
+                  </button>
                 ))}
               </motion.div>
             )}
           </AnimatePresence>
-        </motion.div>
+        </div>
       </div>
 
-      {/* Left — Filter pills */}
-      <motion.div
-        className="map-overlay-left"
-        initial={{ opacity: 0, x: -20 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ delay: 0.5, duration: 0.4 }}
-      >
-        <div className="map-filter-pills" style={{ flexDirection: 'column' }}>
-          {[
-            { key: 'all', label: 'All Types', color: '#fff' },
-            { key: 'ocean', label: 'Ocean', color: TYPE_COLORS.ocean },
-            { key: 'river', label: 'Rivers', color: TYPE_COLORS.river },
-            { key: 'lake', label: 'Lakes', color: TYPE_COLORS.lake },
-            { key: 'reservoir', label: 'Reservoirs', color: TYPE_COLORS.reservoir },
-          ].map(({ key, label, color }) => (
-            <div
-              key={key}
-              className={`map-filter-pill${activeFilter === key ? ' active' : ''}`}
-              onClick={() => setActiveFilter(key)}
-            >
-              <span className="dot" style={{ background: color }} />
-              {label}
-            </div>
-          ))}
-        </div>
-      </motion.div>
-
-      {/* Right — Info panel */}
-      <AnimatePresence>
-        {selectedLocation && (
-          <motion.div
-            className="map-info-panel"
-            initial={{ opacity: 0, x: 50 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 50 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-          >
-            <div className="glass-card glass-card--elevated" style={{
-              marginBottom: '12px',
-              background: 'rgba(10,18,32,0.92)',
-              backdropFilter: 'blur(50px) saturate(180%)',
-            }}>
-              {/* Header */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
-                <div>
-                  <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginBottom: '4px', letterSpacing: '-0.02em' }}>
-                    {selectedLocation.name}
-                  </h3>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-                    <span className={`chip ${selectedLocation.water_body_type}`}>
-                      {selectedLocation.water_body_type}
-                    </span>
-                    <span style={{ fontSize: '10px', color: 'var(--text-quaternary)', fontFamily: 'var(--font-mono)' }}>
-                      {selectedLocation.latitude?.toFixed(3)}°N, {selectedLocation.longitude?.toFixed(3)}°E
-                    </span>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setSelectedLocation(null)}
-                  style={{
-                    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)',
-                    borderRadius: '8px', width: '28px', height: '28px', display: 'flex',
-                    alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-                    color: 'var(--text-tertiary)',
-                  }}
-                >
-                  <X size={14} />
-                </button>
-              </div>
-
-              {isLoadingData ? (
-                <div className="loading-state" style={{ padding: '32px' }}>
-                  <div className="spinner" />
-                  <span style={{ fontSize: '11px' }}>Fetching live data...</span>
-                </div>
-              ) : selectedData?.depth ? (
-                <>
-                  {/* Depth hero */}
-                  <div style={{
-                    textAlign: 'center', marginBottom: '20px',
-                    padding: '20px', borderRadius: '16px',
-                    background: 'linear-gradient(135deg, rgba(10,132,255,0.06) 0%, rgba(100,210,255,0.03) 100%)',
-                    border: '1px solid rgba(100,210,255,0.06)',
-                  }}>
-                    <div style={{
-                      fontSize: '42px', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1,
-                      background: 'var(--gradient-ocean)', WebkitBackgroundClip: 'text',
-                      WebkitTextFillColor: 'transparent', backgroundClip: 'text',
-                    }}>
-                      {selectedData.depth.computed_depth.toFixed(1)}
-                      <span style={{ fontSize: '18px', WebkitTextFillColor: 'var(--text-secondary)' }}> m</span>
-                    </div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600, marginTop: '6px' }}>
-                      Current Water Depth
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                    <MiniStat icon={<Anchor size={13} />} label="Base Depth" value={`${selectedData.depth.base_depth.toFixed(1)}m`} color="var(--accent-blue)" />
-                    <MiniStat icon={<Waves size={13} />} label="Tidal" value={`${selectedData.depth.tidal_offset >= 0 ? '+' : ''}${selectedData.depth.tidal_offset.toFixed(2)}m`} color="var(--accent-teal)" />
-                    <MiniStat icon={<CloudRain size={13} />} label="Rainfall" value={`+${selectedData.depth.rainfall_impact.toFixed(2)}m`} color="var(--accent-green)" />
-                    <MiniStat icon={<Gauge size={13} />} label="Confidence" value={`${(selectedData.depth.confidence * 100).toFixed(0)}%`} color="var(--accent-purple)" />
-                  </div>
-                </>
-              ) : (
-                <div className="empty-state" style={{ padding: '20px' }}>
-                  <Anchor size={24} />
-                  <span style={{ fontSize: '11px' }}>No depth data available</span>
-                </div>
-              )}
-            </div>
-
-            {/* Weather */}
-            {selectedData?.weather && (
-              <motion.div
-                className="glass-card"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.15 }}
-                style={{ marginBottom: '12px', background: 'rgba(10,18,32,0.88)' }}
-              >
-                <div style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)', marginBottom: '10px' }}>Weather</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                  <MiniStat icon={<Thermometer size={12} />} label="Temp" value={`${selectedData.weather.temperature_c?.toFixed(1)}°C`} color="var(--accent-orange)" />
-                  <MiniStat icon={<CloudRain size={12} />} label="Rain" value={`${selectedData.weather.precipitation_mm?.toFixed(1)} mm`} color="var(--accent-blue)" />
-                  <MiniStat icon={<Wind size={12} />} label="Wind" value={`${selectedData.weather.wind_speed_ms?.toFixed(1)} m/s`} color="var(--text-secondary)" />
-                  <MiniStat icon={<Droplets size={12} />} label="Humidity" value={`${selectedData.weather.humidity_pct?.toFixed(0)}%`} color="var(--accent-teal)" />
-                </div>
-              </motion.div>
-            )}
-
-            {/* Full analysis button */}
-            <motion.button
-              className="btn btn-primary"
-              style={{ width: '100%', padding: '13px', fontSize: '13px', borderRadius: '12px' }}
-              onClick={() => navigate(`/location/${selectedLocation.digipin}`)}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-            >
-              <Navigation size={14} />
-              View Full Analysis
-            </motion.button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Bottom stats */}
-      <div className="map-stats-bar">
-        {[
-          { label: 'Total DIGIPIN', value: fmtNum(stats.total), icon: <MapPin size={14} />, color: 'var(--accent-blue)' },
-          { label: 'Coastal', value: fmtNum(stats.ocean), icon: <Waves size={14} />, color: '#0A84FF' },
-          { label: 'Rivers', value: fmtNum(stats.river), icon: <Droplets size={14} />, color: '#64D2FF' },
-          { label: 'Lakes', value: fmtNum(stats.lake), icon: <Fish size={14} />, color: '#30D158' },
-          { label: 'Reservoirs', value: fmtNum(stats.reservoir), icon: <Mountain size={14} />, color: '#BF5AF2' },
-        ].map(({ label, value, icon, color }, i) => (
-          <motion.div
-            key={label}
-            className="glass-card"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.6 + i * 0.08 }}
-            style={{
-              flex: 1, display: 'flex', alignItems: 'center', gap: '10px',
-              padding: '10px 16px',
-              background: 'rgba(10,18,32,0.85)',
-              backdropFilter: 'blur(40px)',
-            }}
-          >
-            <div style={{ color }}>{icon}</div>
-            <div>
-              <div style={{ fontSize: 'var(--text-lg)', fontWeight: 700, letterSpacing: '-0.02em' }}>{value}</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>{label}</div>
-            </div>
-          </motion.div>
+      <div className="map-layers material" role="group" aria-label="Map layers">
+        {LAYERS.map((l) => (
+          <button key={l.key} className={filter === l.key ? 'active' : ''} aria-pressed={filter === l.key}
+            aria-label={`Show ${l.label}`} onClick={() => setFilter(l.key)}>
+            <span className={`swatch ${l.key === 'all' ? 'all' : ''}`} style={l.color ? { background: l.color } : undefined} />
+            {l.label}
+          </button>
         ))}
       </div>
 
-      {loadFailed && !isLoading && (
-        <div style={{
-          position: 'absolute', top: 76, left: '50%', transform: 'translateX(-50%)', zIndex: 15,
-          padding: '10px 16px', borderRadius: 12, fontSize: 12,
-          background: 'rgba(255,69,58,0.15)', border: '1px solid rgba(255,69,58,0.4)', color: '#ffb3ad',
-        }}>
-          Couldn't load locations — is the backend running on port 7860?
+      {stats && (
+        <div className="map-stats material" aria-label="Water body statistics">
+          {statItems.map(([k, v]) => <div key={k}><b>{fmtCompact(v ?? 0)}</b><span>{k}</span></div>)}
         </div>
       )}
 
-      {/* Loading overlay */}
-      {isLoading && (
-        <div style={{
-          position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center', zIndex: 20,
-          background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)',
-        }}>
-          <div className="spinner" style={{ width: '32px', height: '32px', borderWidth: '3px' }} />
-          <div style={{ marginTop: '12px', fontSize: '13px', color: 'var(--text-secondary)' }}>
-            Loading 95K+ DIGIPIN locations...
-          </div>
+      {(filter === 'all' || filter === 'ocean') && !selected && (
+        <div className="map-legend material" aria-label="Ocean depth legend">
+          <div className="lg-title">Ocean depth</div>
+          <div className="ramp" style={{ background: rampCss(scheme) }} />
+          <div className="lg-row"><span>Shallow</span><span>2,400 m</span></div>
         </div>
       )}
-    </div>
-  );
-}
 
-function fmtNum(n) {
-  if (!n) return '0';
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-  return String(n);
-}
+      <AnimatePresence>
+        {selected && (
+          <Panel key="panel" loc={selected} state={state} data={data} onClose={close}
+            onRetry={() => fetchDetails(selected)} onOpen={() => navigate(`/location/${selected.digipin}`)} />
+        )}
+      </AnimatePresence>
 
-function MiniStat({ icon, label, value, color }) {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: '8px',
-      padding: '8px 10px', borderRadius: '10px', background: 'rgba(255,255,255,0.025)',
-      border: '1px solid rgba(255,255,255,0.03)',
-    }}>
-      <div style={{ color, flexShrink: 0, opacity: 0.9 }}>{icon}</div>
-      <div>
-        <div style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>{label}</div>
-        <div style={{ fontSize: '13px', fontWeight: 600, letterSpacing: '-0.01em' }}>{value}</div>
-      </div>
+      <AnimatePresence>
+        {(loading || failed) && (
+          <motion.div className="map-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}>
+            {loading ? (
+              <div className="map-pill material" role="status"><div className="spinner" />Loading water bodies…</div>
+            ) : (
+              <div className="map-pill err material" role="alert">
+                <b>Couldn’t load water bodies</b>
+                <span style={{ color: 'var(--label-2)', fontSize: 13 }}>Check your connection and try again.</span>
+                <button className="btn tinted" onClick={load}>Retry</button>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

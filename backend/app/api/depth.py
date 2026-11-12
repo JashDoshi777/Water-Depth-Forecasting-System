@@ -53,6 +53,16 @@ async def get_depth_forecast(req: DepthForecastRequest):
     try:
         from app.services.bathymetry import classify_water_body
         wb_type = classify_water_body(lat, lon)
+        from app.ml import runtime
+        if runtime.available() and req.hours_ahead <= 48:
+            try:
+                res = await runtime.forecast(lat, lon, wb_type, None, req.hours_ahead)
+                return DepthForecastResponse(
+                    digipin=pin, latitude=lat, longitude=lon, water_body_type=wb_type,
+                    forecast=[ForecastPoint(**f) for f in res["forecast"]], model_version=res["model_version"],
+                )
+            except Exception:
+                pass  # fall through to the physics-only forecast
         forecasts = await compute_depth_forecast(lat, lon, req.hours_ahead, wb_type)
         return DepthForecastResponse(
             digipin=pin,
@@ -60,6 +70,7 @@ async def get_depth_forecast(req: DepthForecastRequest):
             longitude=lon,
             water_body_type=wb_type,
             forecast=[ForecastPoint(**f) for f in forecasts],
+            model_version="physics-fallback",
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Forecast failed: {e}")

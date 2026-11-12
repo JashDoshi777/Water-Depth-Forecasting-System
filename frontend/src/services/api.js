@@ -124,3 +124,13 @@ export const getSystemStatus = () =>
   api.get('/system/status').then(r => r.data);
 
 export default api;
+
+// Search with a larger result window (API returns at most `limit` matches, no offset).
+export const searchLocationsLimit = (q, water_body_type = '', limit = 500) =>
+  cachedGet('/locations/search', { q, water_body_type, limit });
+
+// ── ML ──
+export const getMLOverview = () => api.get('/ml/overview').then(r => r.data);
+export const mlForecast = (body) => api.post('/ml/forecast', body).then(r => r.data);
+export const mlFlood = (body) => api.post('/ml/flood', body).then(r => r.data);
+export const mlStaticDepth = (body) => api.post('/ml/static-depth', body).then(r => r.data);

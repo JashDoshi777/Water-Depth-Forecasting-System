@@ -1,0 +1,19 @@
+.lc-controls { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
+.lc-search { max-width: 520px; }
+.lc-seg-count { margin-left: 6px; font-size: 11px; color: var(--label-2); font-variant-numeric: tabular-nums; }
+.lc-seg-scroll { overflow-x: auto; }
+.lc-table-view { display: block; }
+.lc-list-view { display: none; }
+.lc-name { font-weight: 500; }
+.lc-sk { height: 14px; }
+.lc-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 14px; font-size: 13px; color: var(--label-2); }
+.lc-pager { display: flex; align-items: center; gap: 8px; }
+.lc-pager .btn { height: 32px; padding: 0 12px; font-size: 14px; }
+.lc-note { font-size: 12px; color: var(--label-2); margin: 8px 4px 0; }
+.lc-refresh { opacity: .55; transition: opacity .2s; }
+.table th.num, .table td.num { text-align: right; }
+@media (max-width: 820px) {
+  .lc-table-view { display: none; }
+  .lc-list-view { display: block; }
+  .lc-search { max-width: none; }
+}

@@ -1,221 +1,143 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import {
-  Compass, MapPin, Waves, Droplets, Search, ChevronLeft, ChevronRight,
-  Fish, Mountain, ArrowUpDown,
-} from 'lucide-react';
-import { getAllLocations, searchLocations, getLocationStats } from '../services/api';
+import { ChevronLeft, ChevronRight, MapPinOff, AlertCircle } from 'lucide-react';
+import { getAllLocations, searchLocationsLimit, getLocationStats } from '../services/api';
+import { PageHeader, Card, SearchField, Segmented, Badge, List, EmptyState, fadeUp } from '../components/ui';
+import { fmtNum, TYPE_BADGE } from '../lib/format';
+import './Locations.css';
 
-const fadeUp = { initial: { opacity: 0, y: 16 }, animate: { opacity: 1, y: 0 } };
-const PER_PAGE = 50;
-
-const TYPE_ICONS = {
-  ocean: <Waves size={14} />,
-  river: <Droplets size={14} />,
-  lake: <Fish size={14} />,
-  reservoir: <Mountain size={14} />,
-};
+const PAGE = 50;
+const TYPES = ['', 'ocean', 'river', 'lake', 'reservoir'];
+const TYPE_LABEL = { '': 'All', ocean: 'Ocean', river: 'River', lake: 'Lake', reservoir: 'Reservoir' };
+const Sk = ({ w = '100%' }) => <div className="skeleton lc-sk" style={{ width: w }} />;
 
 export default function Locations() {
   const navigate = useNavigate();
-  const [locations, setLocations] = useState([]);
-  const [total, setTotal] = useState(0);
+  const [q, setQ] = useState('');
+  const [dq, setDq] = useState('');
+  const [type, setType] = useState('');
   const [page, setPage] = useState(0);
-  const [activeTab, setActiveTab] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
   const [stats, setStats] = useState(null);
+  const [res, setRes] = useState({ status: 'loading', rows: [], total: 0 });
+  const [tries, setTries] = useState(0);
+  const seq = useRef(0);
+  const searchCache = useRef({ key: '', rows: [], total: 0 });
 
-  const loadLocations = useCallback(async (p = 0, type = '', q = '') => {
-    setIsLoading(true);
-    try {
-      if (q.length >= 2) {
-        const data = await searchLocations(q, type);
-        setLocations(data.locations || []);
-        setTotal(data.locations?.length || 0);
-      } else {
-        const data = await getAllLocations(PER_PAGE, p * PER_PAGE, type);
-        setLocations(data.locations || []);
-        setTotal(data.total || 0);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  useEffect(() => { getLocationStats().then(setStats).catch(() => {}); }, []);
+
+  // debounce search text and reset page
+  useEffect(() => {
+    const t = setTimeout(() => { setDq(q.trim()); setPage(0); }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
 
   useEffect(() => {
-    loadLocations(page, activeTab, searchQuery);
-  }, [page, activeTab]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const s = await getLocationStats();
-        setStats(s);
-      } catch {}
-    })();
-  }, []);
-
-  const handleSearch = (q) => {
-    setSearchQuery(q);
-    setPage(0);
-    if (q.length >= 2 || q.length === 0) {
-      loadLocations(0, activeTab, q);
+    const id = ++seq.current;
+    const ok = (rows, total) => id === seq.current && setRes({ status: 'ok', rows, total });
+    const fail = () => id === seq.current && setRes({ status: 'error', rows: [], total: 0 });
+    setRes((r) => ({ ...r, status: 'loading' }));
+    if (dq) {
+      const key = `${dq}|${type}`;
+      const c = searchCache.current;
+      if (c.key === key) { ok(c.rows.slice(page * PAGE, (page + 1) * PAGE), c.total); return; }
+      searchLocationsLimit(dq, type, 500).then((r) => {
+        const rows = r.locations || [];
+        searchCache.current = { key, rows, total: r.total ?? rows.length };
+        ok(rows.slice(page * PAGE, (page + 1) * PAGE), r.total ?? rows.length);
+      }).catch(fail);
+    } else {
+      getAllLocations(PAGE, page * PAGE, type).then((r) => ok(r.locations || [], r.total ?? 0)).catch(fail);
     }
-  };
+  }, [dq, type, page, tries]);
 
-  const totalPages = Math.ceil(total / PER_PAGE);
+  const loading = res.status === 'loading';
+  const total = res.total;
+  const searching = !!dq;
+  const capped = searching && total > 500;
+  const reachable = capped ? 500 : total;
+  const start = total ? page * PAGE + 1 : 0;
+  const end = Math.min(page * PAGE + PAGE, reachable);
+  const hasNext = (page + 1) * PAGE < reachable;
+  const count = (t) => (stats ? (t ? stats.by_type?.[t] : stats.total) : null);
+  const go = (loc) => navigate(`/location/${loc.digipin}`);
 
-  const tabs = [
-    { key: '', label: 'All', count: stats?.total || '—' },
-    { key: 'ocean', label: 'Ocean', count: stats?.by_type?.ocean || '—' },
-    { key: 'river', label: 'River', count: stats?.by_type?.river || '—' },
-    { key: 'lake', label: 'Lake', count: stats?.by_type?.lake || '—' },
-    { key: 'reservoir', label: 'Reservoir', count: stats?.by_type?.reservoir || '—' },
-  ];
+  const typeOptions = TYPES.map((t) => ({
+    value: t,
+    label: <>{TYPE_LABEL[t]}{count(t) != null && <span className="lc-seg-count">{fmtNum(count(t))}</span>}</>,
+  }));
+
+  const rows = res.rows;
+  const showSkeleton = loading && !rows.length;
 
   return (
     <div className="page">
-      <motion.div className="page-header" {...fadeUp}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--accent-teal-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Compass size={20} style={{ color: 'var(--accent-teal)' }} />
-          </div>
-          <div>
-            <h1 className="page-title">Locations Explorer</h1>
-            <p className="page-subtitle">Browse and explore 95K+ DIGIPIN water body locations across India</p>
-          </div>
-        </div>
-      </motion.div>
+      <PageHeader title="Locations" subtitle={stats ? `Browse ${fmtNum(stats.total)} monitored water bodies across India.` : 'Browse monitored water bodies across India.'} />
 
-      {/* Stats */}
-      <motion.div className="stats-grid" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }} {...fadeUp} transition={{ delay: 0.1 }}>
-        {tabs.map(({ key, label, count }, i) => (
-          <motion.div
-            key={label}
-            className={`glass-card stat-card ${key === activeTab ? 'glass-card--interactive' : ''}`}
-            style={{
-              cursor: 'pointer',
-              borderColor: key === activeTab ? 'var(--accent-blue)' : undefined,
-            }}
-            {...fadeUp}
-            transition={{ delay: 0.1 + i * 0.04 }}
-            onClick={() => { setActiveTab(key); setPage(0); }}
-          >
-            <div className="stat-card-header">
-              <span className="stat-card-label">{label}</span>
-            </div>
-            <div className="stat-card-value" style={{ fontSize: 'var(--text-2xl)' }}>
-              {typeof count === 'number' && count > 1000 ? `${(count / 1000).toFixed(1)}K` : count}
-            </div>
-          </motion.div>
-        ))}
-      </motion.div>
+      <div className="lc-controls">
+        <div className="lc-search"><SearchField value={q} onChange={setQ} placeholder="Search name, region or city" /></div>
+        <div className="lc-seg-scroll"><Segmented label="Water body type" options={typeOptions} value={type} onChange={(v) => { setType(v); setPage(0); }} /></div>
+      </div>
 
-      {/* Search */}
-      <motion.div {...fadeUp} transition={{ delay: 0.2 }} style={{ marginBottom: 'var(--space-5)', maxWidth: '400px' }}>
-        <div className="search-bar">
-          <Search size={15} />
-          <input
-            type="text"
-            placeholder="Search by name, region, DIGIPIN..."
-            value={searchQuery}
-            onChange={(e) => handleSearch(e.target.value)}
-          />
-        </div>
-      </motion.div>
-
-      {/* Tab bar */}
-      <motion.div {...fadeUp} transition={{ delay: 0.25 }}>
-        <div className="tab-bar" style={{ maxWidth: '500px' }}>
-          {tabs.map(({ key, label }) => (
-            <button
-              key={label}
-              className={`tab-item${key === activeTab ? ' active' : ''}`}
-              onClick={() => { setActiveTab(key); setPage(0); }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </motion.div>
-
-      {/* Table */}
-      {isLoading ? (
-        <div className="loading-state">
-          <div className="spinner" />
-          <span>Loading locations...</span>
-        </div>
+      {res.status === 'error' ? (
+        <Card><EmptyState icon={AlertCircle} title="Couldn’t load locations"
+          action={<button className="btn tinted" onClick={() => setTries((x) => x + 1)}>Retry</button>}>The server took too long or is unavailable.</EmptyState></Card>
+      ) : !loading && !rows.length ? (
+        <Card><EmptyState icon={MapPinOff} title="No locations found">Try a different name, region or city, or choose another type.</EmptyState></Card>
       ) : (
-        <motion.div className="glass-card glass-card--no-hover" style={{ padding: 0, overflowX: 'auto' }} {...fadeUp} transition={{ delay: 0.3 }}>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Region</th>
-                <th>Type</th>
-                <th>DIGIPIN</th>
-                <th>Lat</th>
-                <th>Lon</th>
-                <th>Base Depth</th>
-              </tr>
-            </thead>
-            <tbody>
-              {locations.map((loc, i) => (
-                <tr key={loc.digipin || i} onClick={() => navigate(`/location/${loc.digipin}`)}>
-                  <td style={{ fontWeight: 600 }}>{loc.name}</td>
-                  <td style={{ color: 'var(--text-secondary)' }}>{loc.region}</td>
-                  <td>
-                    <span className={`chip ${loc.water_body_type}`}>
-                      {loc.water_body_type}
-                    </span>
-                  </td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-tertiary)' }}>
-                    {loc.digipin}
-                  </td>
-                  <td style={{ fontSize: '12px' }}>{loc.latitude?.toFixed(3)}</td>
-                  <td style={{ fontSize: '12px' }}>{loc.longitude?.toFixed(3)}</td>
-                  <td style={{ fontWeight: 600, color: 'var(--accent-teal)' }}>
-                    {loc.base_depth?.toFixed(1)}m
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {locations.length === 0 && (
-            <div className="empty-state" style={{ padding: '40px' }}>
-              <MapPin size={32} />
-              <span>No locations found</span>
+        <motion.div {...fadeUp} className={loading && rows.length ? 'lc-refresh' : ''}>
+          {/* Desktop table */}
+          <Card flush className="lc-table-view">
+            <div className="table-wrap">
+              <table className="table" aria-label="Locations">
+                <thead><tr><th>Name</th><th>Region</th><th>Type</th><th>DIGIPIN</th><th className="num">Lat</th><th className="num">Lon</th><th className="num">Base depth</th></tr></thead>
+                <tbody>
+                  {showSkeleton ? [...Array(10)].map((_, i) => (
+                    <tr key={i} style={{ cursor: 'default' }}>{[70, 50, 40, 60, 40, 40, 40].map((w, j) => <td key={j}><Sk w={`${w}%`} /></td>)}</tr>
+                  )) : rows.map((l) => (
+                    <tr key={l.digipin} onClick={() => go(l)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && go(l)} data-testid="location-row">
+                      <td className="lc-name">{l.name}</td>
+                      <td style={{ color: 'var(--label-2)' }}>{l.region || '—'}</td>
+                      <td><Badge tone={TYPE_BADGE[l.water_body_type]}>{l.water_body_type}</Badge></td>
+                      <td className="mono">{l.digipin}</td>
+                      <td className="num tnum">{Number(l.latitude).toFixed(3)}</td>
+                      <td className="num tnum">{Number(l.longitude).toFixed(3)}</td>
+                      <td className="num tnum">{l.base_depth != null ? `${Number(l.base_depth).toFixed(1)} m` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          )}
-        </motion.div>
-      )}
+          </Card>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="pagination">
-          <button
-            className="pagination-btn"
-            disabled={page === 0}
-            onClick={() => setPage(p => Math.max(0, p - 1))}
-          >
-            <ChevronLeft size={14} /> Prev
-          </button>
-          <span className="pagination-info">
-            Page {page + 1} of {totalPages} · {total.toLocaleString()} locations
-          </span>
-          <button
-            className="pagination-btn"
-            disabled={page >= totalPages - 1}
-            onClick={() => setPage(p => p + 1)}
-          >
-            Next <ChevronRight size={14} />
-          </button>
-        </div>
+          {/* Mobile grouped list */}
+          <List className="lc-list-view" aria-label="Locations list">
+            {showSkeleton ? [...Array(8)].map((_, i) => (
+              <div key={i} className="list-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}><Sk w="55%" /><Sk w="80%" /></div>
+            )) : rows.map((l) => (
+              <button key={l.digipin} className="list-row" onClick={() => go(l)} data-testid="location-row">
+                <div className="list-main">
+                  <div className="list-title">{l.name}</div>
+                  <div className="list-detail">{l.region || '—'} · <span className="mono">{l.digipin}</span></div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <Badge tone={TYPE_BADGE[l.water_body_type]}>{l.water_body_type}</Badge>
+                  <div className="list-detail tnum" style={{ marginTop: 3 }}>{l.base_depth != null ? `${Number(l.base_depth).toFixed(1)} m` : '—'}</div>
+                </div>
+                <ChevronRight className="chev" />
+              </button>
+            ))}
+          </List>
+
+          <div className="lc-foot">
+            <span className="tnum" aria-live="polite">{total ? `${fmtNum(start)}–${fmtNum(end)} of ${fmtNum(total)}` : loading ? 'Loading…' : ''}</span>
+            <div className="lc-pager">
+              <button className="btn gray" disabled={page === 0 || loading} onClick={() => setPage((p) => p - 1)}><ChevronLeft size={16} />Previous</button>
+              <button className="btn gray" disabled={!hasNext || loading} onClick={() => setPage((p) => p + 1)}>Next<ChevronRight size={16} /></button>
+            </div>
+          </div>
+          {capped && <p className="lc-note">Showing the 500 closest matches. Refine your search to narrow results.</p>}
+        </motion.div>
       )}
     </div>
   );
