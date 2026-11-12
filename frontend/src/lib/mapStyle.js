@@ -166,19 +166,29 @@ export function addDataLayers(map, scheme, points, rivers) {
   }
 
   const pin = (id, t, color) => add({
-    id, type: 'circle', source: 'wb', filter: ['==', ['get', 't'], t], minzoom: 5.5,
+    id, type: 'circle', source: 'wb', filter: ['==', ['get', 't'], t],
     paint: {
       'circle-color': color,
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 5.5, 2.5, 8, 4.5, 12, 7],
-      'circle-opacity': ['interpolate', ['linear'], ['zoom'], 5.5, 0, 6.5, 1],
-      'circle-stroke-width': 1.5,
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 2.6, 5, 3.6, 8, 5.2, 12, 8],
+      'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 3, 1, 8, 1.6],
       'circle-stroke-color': P.ring,
-      'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 5.5, 0, 6.5, 1],
       'circle-pitch-alignment': 'map',
     },
   });
   pin('wb-lakes', 'lake', P.lake);
   pin('wb-reservoirs', 'reservoir', P.reservoir);
+  // Names appear once there is room (Apple-style: small, quiet, haloed)
+  add({
+    id: 'wb-pin-labels', type: 'symbol', source: 'wb', minzoom: 6,
+    filter: ['in', ['get', 't'], ['literal', ['lake', 'reservoir']]],
+    layout: {
+      'text-field': ['get', 'n'],
+      ...(textFont ? { 'text-font': textFont } : {}),
+      'text-size': ['interpolate', ['linear'], ['zoom'], 6, 10, 10, 12.5],
+      'text-offset': [0, 0.9], 'text-anchor': 'top', 'text-max-width': 8, 'text-padding': 4, 'text-optional': true,
+    },
+    paint: { 'text-color': P.text, 'text-halo-color': P.halo, 'text-halo-width': 1.3, 'text-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0, 6.6, 1] },
+  });
 }
 
 /** Re-colour our data layers for a scheme (no re-adding). */
@@ -197,6 +207,8 @@ export function applyDataTheme(map, scheme) {
   p('wb-states-line', 'line-color', P.stateLine);
   p('wb-state-labels', 'text-color', P.stateText);
   p('wb-state-labels', 'text-halo-color', P.halo);
+  p('wb-pin-labels', 'text-color', P.text);
+  p('wb-pin-labels', 'text-halo-color', P.halo);
   p('wb-lakes', 'circle-color', P.lake);
   p('wb-lakes', 'circle-stroke-color', P.ring);
   p('wb-reservoirs', 'circle-color', P.reservoir);
@@ -209,6 +221,10 @@ export function applyFilter(map, key) {
     for (const id of ids) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', key === 'all' || key === k ? 'visible' : 'none');
     }
+  }
+  if (map.getLayer('wb-pin-labels')) {
+    const types = key === 'lake' ? ['lake'] : key === 'reservoir' ? ['reservoir'] : key === 'all' ? ['lake', 'reservoir'] : [];
+    map.setFilter('wb-pin-labels', ['in', ['get', 't'], ['literal', types]]);
   }
 }
 
